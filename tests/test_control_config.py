@@ -80,3 +80,12 @@ def test_control_config_rejects_invalid_bindings(tmp_path: Path, mutator, messag
 
     with pytest.raises(ControlConfigError, match=message):
         load_control_config(path)
+
+
+def test_control_config_validates_antigravity_even_when_disabled() -> None:
+    data = control_config_data(default_control_config())
+    data["plugins"]["antigravity"]["enabled"] = False
+    data["plugins"]["antigravity"]["agy_path"] = ""
+
+    with pytest.raises(ControlConfigError, match=r"plugins\.antigravity\.agy_path"):
+        parse_control_config(data)

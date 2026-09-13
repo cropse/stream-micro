@@ -165,6 +165,32 @@ def test_antigravity_status_endpoint_rejects_sensitive_fields(tmp_path: Path) ->
     assert response.status_code == 422
 
 
+def test_config_api_rejects_invalid_disabled_antigravity_config_without_persisting(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "control.yaml"
+    write_control_config(path, default_control_config())
+    original = path.read_text(encoding="utf-8")
+    service = BridgeService(path, plugins={})
+    app = create_app(path, service=service)
+    invalid = service.public_config_data()
+    invalid["plugins"]["antigravity"] = {
+        "enabled": False,
+        "agy_path": None,
+        "agy_home": None,
+        "max_sessions": 16,
+    }
+
+    with TestClient(app) as client:
+        response = client.put("/api/config", json=invalid)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "plugins.antigravity.max_sessions must be an integer from 1 to 15"
+    )
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_config_api_never_returns_persisted_cookie_and_blank_save_preserves_it(
     tmp_path: Path,
 ) -> None:

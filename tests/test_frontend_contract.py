@@ -36,6 +36,19 @@ def test_provider_and_quota_settings_have_a_dedicated_configuration_tab() -> Non
     assert '<OpenCodeCard config={config}' in source
     assert '<CodexCard config={config}' in source
     assert '<ClaudeCodeCard config={config}' in source
+    assert '<AntigravityCard config={config}' in source
     assert '<OllamaQuotaCard config={config}' in source
     assert "Enable Ollama Cloud quota provider" in source
     assert 'aria-label="Bridge configuration"' in source
+
+
+def test_antigravity_configuration_card_updates_every_supported_field() -> None:
+    source = FRONTEND.read_text(encoding="utf-8")
+
+    assert "type AntigravityConfig" in source
+    assert "Enable Antigravity provider" in source
+    assert 'setField("enabled", event.target.checked)' in source
+    assert 'setField("agy_path", event.target.value || null)' in source
+    assert 'setField("agy_home", event.target.value || null)' in source
+    assert 'setField("max_sessions", Number(event.target.value))' in source
+    assert "antigravity: { ...current.plugins.antigravity, [field]: value }" in source

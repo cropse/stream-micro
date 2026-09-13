@@ -1,4 +1,5 @@
 import json
+import socket
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -101,26 +102,114 @@ def test_companion_forwards_only_allowlisted_status_fields(monkeypatch: pytest.M
     ]
 
 
-@pytest.mark.parametrize(
-    "status_url, input_data",
-    [
-        ("http://127.0.0.1:1/api/hooks/antigravity/status", "{}"),
-        ("http://127.0.0.1:1/api/hooks/antigravity/status", "not json"),
-    ],
-)
-def test_companion_never_blocks_the_cli_on_reporting_failures(
-    monkeypatch: pytest.MonkeyPatch, status_url: str, input_data: str
-):
-    """Malformed input and unreachable Bridge reporting must exit successfully."""
-    monkeypatch.setenv("STREAM_MICRO_ANTIGRAVITY_STATUS_URL", status_url)
+def test_companion_rejects_remote_status_url(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv(
+        "STREAM_MICRO_ANTIGRAVITY_STATUS_URL",
+        "http://example.com/api/hooks/antigravity/status",
+    )
 
     result = subprocess.run(
         ["node", "integrations/antigravity-stream-micro/scripts/report-status.mjs"],
-        input=input_data,
+        input=json.dumps(
+            {
+                "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+                "cwd": "C:/work/project",
+                "agent_state": "working",
+                "tool_confirmation_pending": False,
+                "task_count": 0,
+                "quota": {},
+            }
+        ),
         capture_output=True,
         check=False,
         encoding="utf-8",
     )
+
+    assert result.returncode == 0
+    assert result.stdout == "stream-micro: unavailable\n"
+
+
+def test_companion_reconstructs_quota_without_nested_fields(monkeypatch: pytest.MonkeyPatch):
+    received: list[dict[str, object]] = []
+
+    class StatusHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            content_length = int(self.headers["content-length"])
+            received.append(json.loads(self.rfile.read(content_length)))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format: str, *_args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), StatusHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv(
+        "STREAM_MICRO_ANTIGRAVITY_STATUS_URL",
+        f"http://localhost:{server.server_port}/api/hooks/antigravity/status",
+    )
+    try:
+        result = subprocess.run(
+            ["node", "integrations/antigravity-stream-micro/scripts/report-status.mjs"],
+            input=json.dumps(
+                {
+                    "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+                    "cwd": "C:/work/project",
+                    "agent_state": "working",
+                    "tool_confirmation_pending": False,
+                    "task_count": 0,
+                    "quota": {
+                        "gemini-weekly": {
+                            "remaining_fraction": 0.75,
+                            "reset_time": "2026-09-14T00:00:00Z",
+                            "raw_response": {"token": "secret"},
+                        },
+                        "invalid bucket": {
+                            "remaining_fraction": 0.5,
+                            "reset_time": "2026-09-14T00:00:00Z",
+                        },
+                    },
+                }
+            ),
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+        )
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+    assert result.returncode == 0
+    assert received[0]["quota"] == {
+        "gemini-weekly": {
+            "remaining_fraction": 0.75,
+            "reset_time": "2026-09-14T00:00:00Z",
+        }
+    }
+
+
+@pytest.mark.parametrize("input_data", ["{}", "not json"])
+def test_companion_never_blocks_the_cli_on_reporting_failures(
+    monkeypatch: pytest.MonkeyPatch, input_data: str
+):
+    """Malformed input and unreachable Bridge reporting must exit successfully."""
+    with socket.socket() as reserved_port:
+        reserved_port.bind(("127.0.0.1", 0))
+        port = reserved_port.getsockname()[1]
+        monkeypatch.setenv(
+            "STREAM_MICRO_ANTIGRAVITY_STATUS_URL",
+            f"http://127.0.0.1:{port}/api/hooks/antigravity/status",
+        )
+
+        result = subprocess.run(
+            ["node", "integrations/antigravity-stream-micro/scripts/report-status.mjs"],
+            input=input_data,
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+        )
 
     assert result.returncode == 0
     assert result.stdout == "stream-micro: unavailable\n"
@@ -232,6 +321,55 @@ def test_snapshot_connects_when_agy_and_live_status_are_available(tmp_path: Path
     assert plugin.snapshot().health.connected is True
 
 
+def test_snapshot_connects_from_live_status_without_agy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    plugin = AntigravityPlugin({"enabled": True})
+    monkeypatch.setattr("stream_micro.plugins.antigravity.shutil.which", lambda _command: None)
+    plugin.handle_status(
+        {
+            "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+            "cwd": str(tmp_path),
+            "agent_state": "working",
+            "tool_confirmation_pending": False,
+            "task_count": 0,
+            "quota": {},
+        }
+    )
+
+    health = plugin.snapshot().health
+
+    assert health.connected is True
+    assert "live companion: available" in health.detail
+    assert "quota: unavailable" in health.detail
+
+
+def test_snapshot_health_detail_reports_cache_live_and_quota(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    (cache_dir / "last_conversations.json").write_text(
+        json.dumps({str(project): "de5c0341-9e8a-40d3-b93f-e87bc874a460"}),
+        encoding="utf-8",
+    )
+    executable = tmp_path / "agy.exe"
+    executable.touch()
+    plugin = AntigravityPlugin(
+        {"enabled": True, "agy_home": str(tmp_path), "agy_path": str(executable)}
+    )
+
+    detail = plugin.snapshot().health.detail
+
+    assert detail == "Cache: available; live companion: unavailable; quota: unavailable"
+
+
+def test_disabled_plugin_snapshot_reports_disabled():
+    plugin = AntigravityPlugin({"enabled": False})
+
+    assert plugin.snapshot().health.detail == "Disabled"
+
+
 def test_snapshot_rejects_directory_as_agy_executable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -280,6 +418,74 @@ def test_windows_launch_uses_official_specific_conversation_flag(tmp_path: Path)
     assert popen.call_args.kwargs["creationflags"] != 0
 
 
+def test_windows_launch_omits_missing_stored_workspace(tmp_path: Path):
+    missing = tmp_path / "removed"
+    with (
+        patch("stream_micro.plugins.antigravity.os.name", "nt"),
+        patch("stream_micro.plugins.antigravity.resolve_agy_command", return_value=["agy.exe"]),
+        patch("stream_micro.plugins.antigravity.subprocess.Popen") as popen,
+    ):
+        launch_antigravity_session(
+            "de5c0341-9e8a-40d3-b93f-e87bc874a460", str(missing), agy_path="agy"
+        )
+
+    assert popen.call_args.args[0] == [
+        "agy.exe",
+        "--conversation",
+        "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+    ]
+    assert popen.call_args.kwargs["cwd"] is None
+
+
+def test_selection_ignores_caller_provided_cwd(tmp_path: Path):
+    launched: list[tuple[str, str | None]] = []
+    plugin = AntigravityPlugin(
+        {"enabled": True}, launcher=lambda session_id, cwd: launched.append((session_id, cwd))
+    )
+    conversation_id = "de5c0341-9e8a-40d3-b93f-e87bc874a460"
+    plugin.handle_status(
+        {
+            "conversation_id": conversation_id,
+            "cwd": str(tmp_path),
+            "agent_state": "idle",
+            "tool_confirmation_pending": False,
+            "task_count": 0,
+            "quota": {},
+        }
+    )
+
+    plugin.invoke("select_session", {"session_id": conversation_id, "cwd": "C:/unsafe"})
+
+    assert launched == [(conversation_id, str(tmp_path))]
+
+
+def test_selection_resumes_live_conversation_after_stored_workspace_is_removed(
+    tmp_path: Path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    launched: list[tuple[str, str | None]] = []
+    plugin = AntigravityPlugin(
+        {"enabled": True}, launcher=lambda session_id, cwd: launched.append((session_id, cwd))
+    )
+    conversation_id = "de5c0341-9e8a-40d3-b93f-e87bc874a460"
+    plugin.handle_status(
+        {
+            "conversation_id": conversation_id,
+            "cwd": str(workspace),
+            "agent_state": "idle",
+            "tool_confirmation_pending": False,
+            "task_count": 0,
+            "quota": {},
+        }
+    )
+    workspace.rmdir()
+
+    plugin.invoke("select_session", {"session_id": conversation_id})
+
+    assert launched == [(conversation_id, None)]
+
+
 def test_idle_status_after_activity_stays_completed_until_selected(tmp_path: Path):
     """An acknowledged completion returns to idle without retaining status input."""
     directory = str(tmp_path)
@@ -301,6 +507,51 @@ def test_idle_status_after_activity_stays_completed_until_selected(tmp_path: Pat
     assert plugin.snapshot().sessions[0].state is SessionState.COMPLETED
     plugin.invoke("select_session", {"session_id": conversation_id})
     assert plugin.snapshot().sessions[0].state is SessionState.IDLE
+
+
+def test_live_state_is_bounded_and_evicts_oldest_deterministically(tmp_path: Path):
+    times = iter((1.0, 2.0, 3.0))
+    plugin = AntigravityPlugin({"enabled": True, "max_sessions": 2}, clock=lambda: next(times))
+    ids = [f"de5c0341-9e8a-40d3-b93f-{index:012x}" for index in range(3)]
+    for conversation_id in ids:
+        plugin.handle_status(
+            {
+                "conversation_id": conversation_id,
+                "cwd": str(tmp_path),
+                "agent_state": "working",
+                "tool_confirmation_pending": False,
+                "task_count": 1,
+                "quota": {},
+            }
+        )
+
+    assert set(plugin._live_sessions) == set(ids[1:])
+    assert set(plugin._live_states) == set(ids[1:])
+    assert len(plugin._completed) <= 2
+
+
+def test_completed_state_is_evicted_with_its_live_session(tmp_path: Path):
+    times = iter((1.0, 2.0, 3.0, 4.0))
+    plugin = AntigravityPlugin({"enabled": True, "max_sessions": 1}, clock=lambda: next(times))
+    first = "de5c0341-9e8a-40d3-b93f-000000000001"
+    second = "de5c0341-9e8a-40d3-b93f-000000000002"
+    base = {
+        "cwd": str(tmp_path),
+        "tool_confirmation_pending": False,
+        "quota": {},
+    }
+    plugin.handle_status(
+        {**base, "conversation_id": first, "agent_state": "working", "task_count": 1}
+    )
+    plugin.handle_status(
+        {**base, "conversation_id": first, "agent_state": "idle", "task_count": 0}
+    )
+    plugin.handle_status(
+        {**base, "conversation_id": second, "agent_state": "working", "task_count": 1}
+    )
+
+    assert first not in plugin._completed
+    assert set(plugin._live_sessions) == {second}
 
 
 @pytest.mark.parametrize(

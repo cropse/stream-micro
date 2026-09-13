@@ -195,13 +195,12 @@ def launch_antigravity_session(
 
     if not isinstance(conversation_id, str) or not _CONVERSATION_ID.fullmatch(conversation_id):
         raise AntigravityError("antigravity conversation ID is invalid")
-    if not isinstance(directory, str) or not Path(directory).is_dir():
-        raise AntigravityError("antigravity workspace directory no longer exists")
+    cwd = directory if isinstance(directory, str) and Path(directory).is_dir() else None
     creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0) if os.name == "nt" else 0
     try:
         subprocess.Popen(
             [*resolve_agy_command(agy_path), "--conversation", conversation_id],
-            cwd=directory,
+            cwd=cwd,
             shell=False,
             creationflags=creationflags,
         )
@@ -297,7 +296,21 @@ class AntigravityPlugin:
         )
         self._live_states[conversation_id] = state
         self._signals = signals
+        self._evict_live_sessions()
         return {"result": "status_updated", "session_id": conversation_id}
+
+    def _evict_live_sessions(self) -> None:
+        while len(self._live_sessions) > self.max_sessions:
+            evicted_id = min(
+                self._live_sessions,
+                key=lambda session_id: (
+                    self._live_sessions[session_id].updated_at,
+                    session_id,
+                ),
+            )
+            self._live_sessions.pop(evicted_id, None)
+            self._live_states.pop(evicted_id, None)
+            self._completed.discard(evicted_id)
 
     def snapshot(self) -> PluginSnapshot:
         cache_records = read_last_conversations(self.cache_path, max_sessions=self.max_sessions)
@@ -320,18 +333,23 @@ class AntigravityPlugin:
         command_available = bool(shutil.which(executable)) or (
             Path(executable).expanduser().is_file()
         )
-        has_recognized_data = bool(cache_records) or bool(self._live_sessions)
-        connected = (
-            bool(self.config.get("enabled", False)) and command_available and has_recognized_data
-        )
-        if connected:
-            detail = "Connected"
-        elif not command_available:
-            detail = "Antigravity CLI was not found"
-        elif not has_recognized_data:
-            detail = "No Antigravity cache or live status data"
-        else:
+        enabled = bool(self.config.get("enabled", False))
+        has_cache = bool(cache_records)
+        has_live = bool(self._live_sessions)
+        has_quota = bool(self._signals)
+        connected = enabled and (has_live or (command_available and has_cache))
+        if not enabled:
             detail = "Disabled"
+        else:
+            detail = "; ".join(
+                (
+                    f"Cache: {'available' if has_cache else 'unavailable'}",
+                    f"live companion: {'available' if has_live else 'unavailable'}",
+                    f"quota: {'available' if has_quota else 'unavailable'}",
+                )
+            )
+            if not connected and not command_available:
+                detail += "; Antigravity CLI was not found"
         return PluginSnapshot(
             PluginHealth(connected, detail),
             tuple(sessions),
@@ -355,7 +373,11 @@ class AntigravityPlugin:
             agy_path = self.config.get("agy_path") or "agy"
             launch_antigravity_session(conversation_id, session.directory, agy_path=agy_path)
         else:
-            self._launcher(conversation_id, session.directory)
+            directory = session.directory
+            self._launcher(
+                conversation_id,
+                directory if isinstance(directory, str) and Path(directory).is_dir() else None,
+            )
         self._completed.discard(conversation_id)
         if (
             conversation_id in self._live_states

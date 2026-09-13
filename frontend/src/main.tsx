@@ -23,6 +23,7 @@ type OllamaQuotaConfig = {
 };
 type CodexConfig = { enabled?: boolean; codex_path?: string | null; codex_home?: string | null };
 type ClaudeCodeConfig = { enabled?: boolean; claude_path?: string | null; claude_home?: string | null; plugin_dir?: string | null; max_sessions?: number };
+type AntigravityConfig = { enabled?: boolean; agy_path?: string | null; agy_home?: string | null; max_sessions?: number };
 type OpenCodeConfig = { enabled?: boolean; endpoints?: string[]; password_env?: string | null };
 type PluginConfig = { enabled?: boolean; [key: string]: unknown };
 type Config = {
@@ -241,6 +242,44 @@ function ClaudeCodeCard({ config, snapshot, updateConfig }: {
     <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>recent Claude Code Sessions available to button zones</span></div>
     {snapshot?.signals && <UsageBars signals={snapshot.signals} generic />}
     <p className="provider-note">The companion hook adds live Session status. Quota appears after Claude Code's status line receives its first API response.</p>
+  </section>;
+}
+
+function AntigravityCard({ config, snapshot, updateConfig }: {
+  config: Config | null;
+  snapshot?: PluginSnapshot;
+  updateConfig: (change: (current: Config) => Config) => void;
+}) {
+  const pluginConfig = config?.plugins?.antigravity as AntigravityConfig | undefined;
+  const setField = (field: keyof AntigravityConfig, value: string | number | boolean | null) => {
+    updateConfig((current) => ({
+      ...current,
+      plugins: {
+        ...current.plugins,
+        antigravity: { ...current.plugins.antigravity, [field]: value },
+      },
+    }));
+  };
+  return <section className="panel provider-card antigravity-card">
+    <p>ANTIGRAVITY CLI</p>
+    <h2>Conversations &amp; quota</h2>
+    <label className="toggle-field"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setField("enabled", event.target.checked)} /> Enable Antigravity provider</label>
+    <details className="ollama-advanced">
+      <summary>Advanced settings</summary>
+      <label>Antigravity executable
+        <input type="text" placeholder="agy (use PATH)" value={pluginConfig?.agy_path ?? ""} onChange={(event) => setField("agy_path", event.target.value || null)} />
+      </label>
+      <label>Antigravity data folder
+        <input type="text" placeholder="Use ~/.gemini/antigravity-cli" value={pluginConfig?.agy_home ?? ""} onChange={(event) => setField("agy_home", event.target.value || null)} />
+      </label>
+      <label>Recent conversations
+        <input type="number" min={1} max={15} value={pluginConfig?.max_sessions ?? 15} onChange={(event) => setField("max_sessions", Number(event.target.value))} />
+      </label>
+    </details>
+    {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
+    <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>recent Antigravity conversations available to button zones</span></div>
+    {snapshot?.signals && <UsageBars signals={snapshot.signals} generic />}
+    <p className="provider-note">The status-line companion adds live state and quota without forwarding prompts or credentials.</p>
   </section>;
 }
 
@@ -794,6 +833,7 @@ function App() {
         <OpenCodeCard config={config} snapshot={snapshots.opencode} updateConfig={updateConfig} />
         <CodexCard config={config} snapshot={snapshots.codex} updateConfig={updateConfig} />
         <ClaudeCodeCard config={config} snapshot={snapshots.claude_code} updateConfig={updateConfig} />
+        <AntigravityCard config={config} snapshot={snapshots.antigravity} updateConfig={updateConfig} />
         <OllamaQuotaCard config={config} snapshot={snapshots.ollama_quota} updateConfig={updateConfig} />
       </div>
     </section>}

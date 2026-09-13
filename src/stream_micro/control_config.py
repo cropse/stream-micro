@@ -12,6 +12,8 @@ from typing import Any
 
 import yaml
 
+from .plugins.antigravity import AntigravityError, validate_antigravity_config
+
 MK2_KEY_COUNT = 15
 SCHEMA_VERSION = 1
 
@@ -208,6 +210,15 @@ def validate_control_config(config: ControlConfig) -> None:
             raise ControlConfigError("plugin ids must be non-empty strings")
         if not isinstance(plugin_config, dict):
             raise ControlConfigError(f"plugins.{plugin_id} must be a mapping")
+    antigravity = config.plugins.get("antigravity")
+    if antigravity is not None:
+        try:
+            validate_antigravity_config(antigravity)
+        except AntigravityError as exc:
+            message = str(exc)
+            if message.startswith("antigravity."):
+                message = f"plugins.{message}"
+            raise ControlConfigError(message) from exc
     for binding in config.buttons:
         if not isinstance(binding.span, int) or isinstance(binding.span, bool) or binding.span < 1:
             raise ControlConfigError(
