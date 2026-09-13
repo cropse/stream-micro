@@ -140,3 +140,16 @@ def test_last_conversations_applies_requested_max_sessions_cap(tmp_path: Path):
     cache.write_text(json.dumps(entries), encoding="utf-8")
 
     assert len(read_last_conversations(cache, max_sessions=2)) == 2
+
+
+@pytest.mark.parametrize("max_sessions", [0, -1])
+def test_last_conversations_never_exceeds_nonpositive_cap(tmp_path: Path, max_sessions: int):
+    project = tmp_path / "project"
+    project.mkdir()
+    cache = tmp_path / "last_conversations.json"
+    cache.write_text(
+        json.dumps({str(project): "de5c0341-9e8a-40d3-b93f-e87bc874a460"}),
+        encoding="utf-8",
+    )
+
+    assert read_last_conversations(cache, max_sessions=max_sessions) == ()

@@ -58,6 +58,8 @@ def read_last_conversations(
 ) -> tuple[AntigravityCacheSession, ...]:
     """Read only the documented Antigravity last-conversations cache."""
 
+    if max_sessions <= 0:
+        return ()
     try:
         if path.stat().st_size > MAX_CACHE_BYTES:
             return ()
