@@ -14,6 +14,7 @@ from stream_micro.plugins.antigravity import (
     launch_antigravity_session,
     map_status_payload,
     read_last_conversations,
+    resolve_agy_command,
     validate_antigravity_config,
 )
 from stream_micro.plugins.base import SessionState
@@ -108,10 +109,135 @@ def test_idle_status_after_activity_stays_completed_until_selected(tmp_path: Pat
 
     plugin.handle_status(busy)
     plugin.handle_status({**busy, "agent_state": "idle", "task_count": 0})
+    plugin.handle_status({**busy, "agent_state": "idle", "task_count": 0})
 
     assert plugin.snapshot().sessions[0].state is SessionState.COMPLETED
     plugin.invoke("select_session", {"session_id": conversation_id})
     assert plugin.snapshot().sessions[0].state is SessionState.IDLE
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+            "cwd": "C:/work/project",
+            "agent_state": "idle",
+            "tool_confirmation_pending": False,
+            "task_count": 0,
+            "quota": {},
+            "prompt": "sensitive input",
+        },
+    ],
+)
+def test_status_payload_rejects_unknown_fields(payload):
+    """Unexpected status fields, including sensitive content, are rejected."""
+    with pytest.raises(AntigravityError, match="fields"):
+        map_status_payload(payload)
+
+
+def test_status_payload_rejects_missing_required_field():
+    """A partial status cannot be mapped to a display-safe session."""
+    payload = {
+        "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+        "cwd": "C:/work/project",
+        "agent_state": "idle",
+        "tool_confirmation_pending": False,
+        "task_count": 0,
+    }
+
+    with pytest.raises(AntigravityError, match="fields"):
+        map_status_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "quota",
+    [
+        {"weekly": {"remaining_fraction": 0.5}},
+        {"weekly": {"remaining_fraction": 1.5, "reset_time": "2026-09-14T00:00:00Z"}},
+    ],
+)
+def test_status_payload_rejects_malformed_quota(quota):
+    """Quota windows must have complete bounded documented values."""
+    payload = {
+        "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+        "cwd": "C:/work/project",
+        "agent_state": "idle",
+        "tool_confirmation_pending": False,
+        "task_count": 0,
+        "quota": quota,
+    }
+
+    with pytest.raises(AntigravityError):
+        map_status_payload(payload)
+
+
+def test_status_payload_rejects_invalid_quota_timestamp():
+    """Quota reset timestamps must be timezone-aware ISO dates."""
+    payload = {
+        "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+        "cwd": "C:/work/project",
+        "agent_state": "idle",
+        "tool_confirmation_pending": False,
+        "task_count": 0,
+        "quota": {"weekly": {"remaining_fraction": 0.5, "reset_time": "tomorrow"}},
+    }
+
+    with pytest.raises(AntigravityError, match="ISO date"):
+        map_status_payload(payload)
+
+
+def test_status_payload_sorts_two_quota_buckets_by_id():
+    """The first two display slots follow deterministic bucket-ID ordering."""
+    _state, signals = map_status_payload(
+        {
+            "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+            "cwd": "C:/work/project",
+            "agent_state": "idle",
+            "tool_confirmation_pending": False,
+            "task_count": 0,
+            "quota": {
+                "zeta": {"remaining_fraction": 0.2, "reset_time": "2026-09-15T00:00:00Z"},
+                "alpha": {"remaining_fraction": 0.75, "reset_time": "2026-09-14T00:00:00Z"},
+            },
+        }
+    )
+
+    assert signals == {
+        "primary_percent": 25.0,
+        "primary_label": "ALPHA",
+        "primary_reset_at": "2026-09-14T00:00:00+00:00",
+        "secondary_percent": 80.0,
+        "secondary_label": "ZETA",
+        "secondary_reset_at": "2026-09-15T00:00:00+00:00",
+    }
+
+
+@pytest.mark.parametrize(
+    ("agy_path", "expected"),
+    [
+        ("C:/tools/agy.cmd", ["cmd.exe", "/d", "/s", "/c", "C:/tools/agy.cmd"]),
+        (
+            "C:/tools/agy.ps1",
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-File",
+                "C:/tools/agy.ps1",
+            ],
+        ),
+    ],
+)
+def test_windows_command_resolution_uses_constrained_wrappers(agy_path, expected):
+    """Windows script wrappers are invoked without a general-purpose shell."""
+    with (
+        patch("stream_micro.plugins.antigravity.os.name", "nt"),
+        patch("stream_micro.plugins.antigravity.shutil.which", return_value=None),
+        patch.dict("stream_micro.plugins.antigravity.os.environ", {"COMSPEC": "cmd.exe"}),
+    ):
+        assert resolve_agy_command(agy_path) == expected
 
 
 @pytest.mark.parametrize(

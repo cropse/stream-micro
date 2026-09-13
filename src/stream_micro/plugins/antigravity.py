@@ -283,7 +283,11 @@ class AntigravityPlugin:
         state, signals = map_status_payload(payload)
         conversation_id, directory = _status_session_fields(payload)
         previous = self._live_states.get(conversation_id)
-        if state is SessionState.IDLE and previous in (SessionState.RUNNING, SessionState.WAITING):
+        if state is SessionState.IDLE and previous in (
+            SessionState.RUNNING,
+            SessionState.WAITING,
+            SessionState.COMPLETED,
+        ):
             state = SessionState.COMPLETED
             self._completed.add(conversation_id)
         elif state in (SessionState.RUNNING, SessionState.WAITING):
