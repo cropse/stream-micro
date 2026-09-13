@@ -1,0 +1,8 @@
+{
+  "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+  "cwd": "C:\\work\\project",
+  "agent_state": "working",
+  "tool_confirmation_pending": false,
+  "task_count": 0,
+  "quota": {"gemini-weekly": {"remaining_fraction": 0.75, "reset_time": "2026-09-14T00:00:00Z"}}
+}

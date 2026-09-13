@@ -26,6 +26,18 @@ from stream_micro.plugins.antigravity import (
 from stream_micro.plugins.base import SessionState
 
 
+def test_companion_fixture_matches_plugin_contract():
+    """The bundled status-line example must remain accepted by the plugin."""
+    payload = json.loads(
+        Path("integrations/antigravity-stream-micro/fixtures/status.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    plugin = AntigravityPlugin({"enabled": True}, launcher=lambda _id, _cwd: None)
+
+    assert plugin.handle_status(payload)["result"] == "status_updated"
+
+
 def test_bridge_registers_antigravity_only_when_enabled(tmp_path: Path):
     """Enabled Antigravity config creates the provider for status reporting."""
     data = control_config_data(default_control_config())
