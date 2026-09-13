@@ -1,7 +1,5 @@
 # stream-micro
 
-![stream-micro Stream Deck agent control surface](docs/images/readme-cover.png)
-
 Local Agent Control Surface for **Elgato Stream Deck MK.2 only** (15 keys,
 5 × 3). It discovers a locally running OpenCode Server, renders the first five
 Sessions on the first row, and provides a local Dashboard at the same address.

@@ -85,6 +85,53 @@ def test_plugin_uses_workspace_name_without_reading_prompt(tmp_path: Path):
     assert snapshot.sessions[0].state is SessionState.IDLE
 
 
+def test_snapshot_is_unavailable_without_agy_or_recognized_data(tmp_path: Path):
+    """An enabled provider without its CLI, cache, or status input is unavailable."""
+    plugin = AntigravityPlugin({"enabled": True, "agy_home": str(tmp_path)})
+
+    snapshot = plugin.snapshot()
+
+    assert snapshot.health.connected is False
+
+
+def test_snapshot_requires_agy_even_when_cache_has_a_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Cached sessions cannot claim availability when the CLI cannot restore them."""
+    project = tmp_path / "project"
+    project.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    (cache_dir / "last_conversations.json").write_text(
+        json.dumps({str(project): "de5c0341-9e8a-40d3-b93f-e87bc874a460"}), encoding="utf-8"
+    )
+    plugin = AntigravityPlugin({"enabled": True, "agy_home": str(tmp_path)})
+    monkeypatch.setattr("stream_micro.plugins.antigravity.shutil.which", lambda _command: None)
+
+    snapshot = plugin.snapshot()
+
+    assert snapshot.health.connected is False
+
+
+def test_snapshot_connects_when_agy_and_live_status_are_available(tmp_path: Path):
+    """An accepted live update and resolvable CLI make the provider available."""
+    executable = tmp_path / "agy.exe"
+    executable.touch()
+    plugin = AntigravityPlugin({"enabled": True, "agy_path": str(executable)})
+    plugin.handle_status(
+        {
+            "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+            "cwd": str(tmp_path),
+            "agent_state": "working",
+            "tool_confirmation_pending": False,
+            "task_count": 1,
+            "quota": {},
+        }
+    )
+
+    assert plugin.snapshot().health.connected is True
+
+
 def test_selection_resumes_only_a_current_session(tmp_path: Path):
     """Selection must reject an ID missing from the current snapshot."""
     plugin = AntigravityPlugin({"enabled": True}, launcher=lambda _id, _cwd: None)

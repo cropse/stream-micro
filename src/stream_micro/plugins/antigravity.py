@@ -316,8 +316,20 @@ class AntigravityPlugin:
             )
             if len(sessions) >= self.max_sessions:
                 break
+        executable = str(self.config.get("agy_path") or "agy")
+        command_available = bool(shutil.which(executable)) or Path(executable).expanduser().exists()
+        has_recognized_data = bool(cache_records) or bool(self._live_sessions)
+        connected = bool(self.config.get("enabled", False)) and command_available and has_recognized_data
+        if connected:
+            detail = "Connected"
+        elif not command_available:
+            detail = "Antigravity CLI was not found"
+        elif not has_recognized_data:
+            detail = "No Antigravity cache or live status data"
+        else:
+            detail = "Disabled"
         return PluginSnapshot(
-            PluginHealth(bool(self.config.get("enabled", False)), "Connected"),
+            PluginHealth(connected, detail),
             tuple(sessions),
             dict(self._signals),
         )
