@@ -132,6 +132,23 @@ def test_snapshot_connects_when_agy_and_live_status_are_available(tmp_path: Path
     assert plugin.snapshot().health.connected is True
 
 
+def test_snapshot_rejects_directory_as_agy_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A directory configured as agy_path must not establish provider health."""
+    project = tmp_path / "project"
+    project.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    (cache_dir / "last_conversations.json").write_text(
+        json.dumps({str(project): "de5c0341-9e8a-40d3-b93f-e87bc874a460"}), encoding="utf-8"
+    )
+    monkeypatch.setattr("stream_micro.plugins.antigravity.shutil.which", lambda _command: None)
+    plugin = AntigravityPlugin({"enabled": True, "agy_home": str(tmp_path), "agy_path": str(tmp_path)})
+
+    assert plugin.snapshot().health.connected is False
+
+
 def test_selection_resumes_only_a_current_session(tmp_path: Path):
     """Selection must reject an ID missing from the current snapshot."""
     plugin = AntigravityPlugin({"enabled": True}, launcher=lambda _id, _cwd: None)
