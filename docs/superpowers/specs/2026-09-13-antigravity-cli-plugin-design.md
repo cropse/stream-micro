@@ -9,9 +9,9 @@ The first release supports Antigravity CLI only. It does not inspect or automate
 ## Scope and Constraints
 
 - The provider is optional and disabled by default.
-- The provider uses only the installed `agy` CLI, its documented session-resume behavior, a documented or explicitly configured companion hook/status-line mechanism, and a validated local session metadata cache.
+- The provider uses only the installed `agy` CLI, its documented `cache/last_conversations.json` workspace cache, documented `--conversation` resume behavior, and documented status-line JSON input.
 - A key press can resume only a session present in the provider's current snapshot.
-- The Bridge must execute `agy --continue <session-id>` with `shell=False`, in a new Windows console, using the session's validated workspace directory as `cwd`.
+- The Bridge must execute `agy --conversation <conversation-id>` with `shell=False`, in a new Windows console, using the session's validated workspace directory as `cwd`.
 - The frontend continues to use the Bridge's local API. It never reads Antigravity files or credentials.
 - Prompts, conversation contents, authentication material, and raw quota responses must never be sent to the Bridge, dashboard, logs, tests, or source control.
 - Missing CLI binaries, unknown cache formats, invalid metadata, absent companion data, or inaccessible files produce a non-connected or partial snapshot. They never trigger Desktop database parsing or arbitrary command execution.
@@ -26,7 +26,6 @@ plugins:
     enabled: false
     agy_path: agy
     agy_home: null
-    companion_dir: null
     max_sessions: 15
 ```
 
@@ -34,8 +33,7 @@ Validation accepts only these keys:
 
 - `enabled`: optional boolean.
 - `agy_path`: optional non-empty executable path or command name.
-- `agy_home`: optional non-empty directory path used to locate documented CLI metadata.
-- `companion_dir`: optional non-empty directory path used when launching a session with the bundled companion enabled.
+- `agy_home`: optional non-empty directory path used to locate documented CLI state. Its default is `~/.gemini/antigravity-cli`.
 - `max_sessions`: integer from 1 through the Stream Deck/dashboard session limit of 15.
 
 There is intentionally no arbitrary command, arguments field, URL, token, or shell template.
@@ -55,55 +53,47 @@ PluginManifest(
 )
 ```
 
-The plugin owns three independent sources of display state:
+The plugin owns two independent sources of display state:
 
-1. Validated CLI metadata supplies recent sessions: stable session ID, display title, workspace directory, and last-updated time.
-2. The loopback lifecycle endpoint supplies current state for a session: `RUNNING`, `WAITING`, `COMPLETED`, or `ERROR`.
-3. The loopback quota endpoint supplies normalized, display-safe quota signals.
+1. The documented CLI cache `~/.gemini/antigravity-cli/cache/last_conversations.json` maps absolute workspace paths to their most recent conversation IDs. Each cache entry becomes one session whose title and project are the workspace folder name; the cache does not expose prompts, conversation contents, or timestamps.
+2. The documented `statusLine` command input is forwarded by the bundled companion to the loopback Bridge. It supplies `conversation_id`, `cwd`, `agent_state`, `tool_confirmation_pending`, `task_count`, and structured quota fields. The plugin maps those fields to state and normalized quota signals.
 
-Snapshot construction reads cached CLI metadata, overlays lifecycle records by session ID, sorts by most recent known update, and caps the result at `max_sessions`. Lifecycle state wins over default idle state. A completed state remains visible until the user selects the session, after which it returns to idle until another lifecycle event arrives.
+Snapshot construction reads the cache, overlays live status records by conversation ID, orders live records first and the remaining cached workspace sessions deterministically by normalized workspace path, and caps the result at `max_sessions`. A status transition from `RUNNING` or `WAITING` to idle becomes `COMPLETED`; otherwise idle remains `IDLE`. A completed state remains visible until the user selects the session, after which it returns to idle until another status-line update arrives.
 
-Provider health is connected when `agy` is available and at least one recognized metadata source or accepted lifecycle record is present. The detail explains whether metadata, live companion updates, and quota data are available. If the plugin is disabled, health reads `Disabled`.
+Provider health is connected when `agy` is available and the cache is recognized, or a valid status-line update has been accepted. The detail explains whether cache, live companion updates, and quota data are available. If the plugin is disabled, health reads `Disabled`.
 
 ## Session Metadata Boundary
 
-Antigravity CLI's local cache location and record shape must be treated as an adapter boundary rather than inferred throughout the provider.
+Antigravity CLI's documented workspace cache is the only on-disk session source.
 
-A narrow metadata reader:
+A narrow cache reader:
 
-- uses the configured `agy_home`, otherwise the documented/default Antigravity CLI home;
-- locates only known, non-secret session metadata files;
-- bounds file size and record count before parsing;
-- validates identifier, title, workspace path, and timestamp types;
-- ignores malformed records and returns no sessions for an unrecognized schema;
-- never reads token stores, credential files, conversation transcripts, or Antigravity Desktop `state.vscdb` files.
-
-The exact on-disk format is verified against a locally installed supported `agy` version before implementation. If the CLI later provides an official machine-readable conversation command, it replaces this reader without changing the plugin contract.
+- uses the configured `agy_home`, otherwise `~/.gemini/antigravity-cli`;
+- reads only `cache/last_conversations.json`, a JSON map of absolute workspace paths to conversation IDs;
+- bounds file size and entry count before parsing;
+- validates identifiers and existing workspace paths;
+- derives title and project from the workspace folder name, never from prompt data;
+- ignores malformed entries and returns no sessions for an unrecognized document;
+- never reads `history.jsonl`, conversation databases, token stores, credential files, transcripts, or Antigravity Desktop `state.vscdb` files.
 
 ## Lifecycle and Quota Companion
 
-Add a bundled companion integration directory analogous to the Claude Code integration. Its configuration is opt-in through `companion_dir` and documented setup instructions.
+Add a bundled status-line companion integration. The user configures Antigravity CLI's documented `statusLine` command to run it. The companion receives the documented status-line JSON on stdin and sends only a schema-validated loopback POST request:
 
-The companion sends only schema-validated loopback POST requests:
+- `POST /api/hooks/antigravity/status`
 
-- `POST /api/plugins/antigravity/event`
-- `POST /api/plugins/antigravity/quota`
+The payload requirements are:
 
-Lifecycle payload requirements:
+- `conversation_id`: a conservative valid Antigravity conversation identifier.
+- `cwd`: a validated absolute workspace path.
+- `agent_state`: one documented value, mapped to `RUNNING` for `thinking`, `working`, `tool_use`, or `initializing`, otherwise `IDLE`.
+- `tool_confirmation_pending`: when true, maps to `WAITING` and takes precedence over `agent_state`.
+- `task_count`: a non-negative integer. A positive count maps an otherwise idle session to `RUNNING`.
+- Optional normalized quota windows formed from documented `quota` entries. Each includes finite `remaining_fraction` from 0 through 1 and a valid ISO-8601 `reset_time`; the plugin converts it to used percentage, short label, and reset time.
 
-- `session_id`: a conservative valid Antigravity session identifier.
-- `event`: one allowlisted lifecycle event mapped to `RUNNING`, `WAITING`, `COMPLETED`, or `ERROR`.
-- Optional non-sensitive title and `cwd` may update a live-only session record.
+The HTTP handler resolves the registered plugin, rejects disabled or missing plugins, rejects unknown fields and invalid values, and returns no sensitive detail. It remains loopback-only under the existing Bridge server boundary.
 
-Quota payload requirements:
-
-- Optional `session_id` with the same validation.
-- Normalized display signals only, such as numeric percentage, short window label, and ISO-8601 reset time.
-- All percentages must be finite values between 0 and 100.
-
-The HTTP handlers resolve the registered plugin, reject disabled or missing plugins, reject unknown fields and invalid values, and return no sensitive detail. They remain loopback-only under the existing Bridge server boundary.
-
-The companion does not transmit prompt text, model responses, artifacts, command output, credentials, cookie values, OAuth data, tokens, or raw provider responses.
+The companion does not transmit prompts, transcript paths, model information, email, raw status JSON, model responses, artifacts, command output, credentials, cookie values, OAuth data, tokens, or raw provider responses.
 
 ## Session Selection
 
@@ -112,10 +102,9 @@ The companion does not transmit prompt text, model responses, artifacts, command
 1. Validate the action and session ID.
 2. Confirm the ID exists in the current snapshot.
 3. Resolve `agy_path` as a direct executable or Windows shim without using a shell.
-4. Start a new console with `agy --continue <session-id>`.
+4. Start a new console with `agy --conversation <conversation-id>`.
 5. Use the known workspace directory when it exists; otherwise omit `cwd` rather than accepting a caller-provided path.
-6. Include the configured companion directory only through the documented Antigravity CLI integration mechanism.
-7. Clear a completed indicator for the selected session and return a small success object.
+6. Clear a completed indicator for the selected session and return a small success object.
 
 Unknown actions, missing binaries, invalid sessions, and launch failures raise `AntigravityError`. The action API will report the failure without executing a fallback command.
 
@@ -125,11 +114,11 @@ Register the provider through the existing plugin registry/configuration flow. U
 
 Extend `bridge.example.yaml` and the README with:
 
-- Antigravity CLI installation prerequisite.
+- Antigravity CLI installation prerequisite and default Windows executable location.
 - Plugin configuration example.
-- Companion installation/configuration instructions.
-- Explanation that the integration is CLI-only.
-- Safe-degradation behavior and no-credential boundary.
+- `statusLine` companion configuration instructions.
+- Explanation that the integration is CLI-only and presents one most-recent conversation per workspace.
+- Safe-degradation behavior and no-prompt/no-credential boundary.
 
 ## Error Handling
 
