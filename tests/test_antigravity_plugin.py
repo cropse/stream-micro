@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -10,9 +11,107 @@ from stream_micro.plugins.antigravity import (
     AntigravityCacheSession,
     AntigravityError,
     AntigravityPlugin,
+    launch_antigravity_session,
+    map_status_payload,
     read_last_conversations,
     validate_antigravity_config,
 )
+from stream_micro.plugins.base import SessionState
+
+
+def test_status_payload_prioritizes_confirmation_and_normalizes_quota():
+    """A pending confirmation must override activity and quota is display-safe."""
+    state, signals = map_status_payload(
+        {
+            "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+            "cwd": "C:/work/project",
+            "agent_state": "working",
+            "tool_confirmation_pending": True,
+            "task_count": 1,
+            "quota": {
+                "gemini-weekly": {
+                    "remaining_fraction": 0.75,
+                    "reset_time": "2026-09-14T00:00:00Z",
+                }
+            },
+        }
+    )
+
+    assert state is SessionState.WAITING
+    assert signals == {
+        "primary_percent": 25.0,
+        "primary_label": "GEMINI-WEEKL",
+        "primary_reset_at": "2026-09-14T00:00:00+00:00",
+    }
+
+
+def test_plugin_uses_workspace_name_without_reading_prompt(tmp_path: Path):
+    """Cache-only snapshots use the workspace folder rather than prompt content."""
+    project = tmp_path / "project"
+    project.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    (cache_dir / "last_conversations.json").write_text(
+        json.dumps({str(project): "de5c0341-9e8a-40d3-b93f-e87bc874a460"}), encoding="utf-8"
+    )
+    plugin = AntigravityPlugin({"enabled": True, "agy_home": str(tmp_path)})
+
+    snapshot = plugin.snapshot()
+
+    assert snapshot.sessions[0].title == "project"
+    assert snapshot.sessions[0].directory == str(project)
+    assert snapshot.sessions[0].state is SessionState.IDLE
+
+
+def test_selection_resumes_only_a_current_session(tmp_path: Path):
+    """Selection must reject an ID missing from the current snapshot."""
+    plugin = AntigravityPlugin({"enabled": True}, launcher=lambda _id, _cwd: None)
+
+    with pytest.raises(AntigravityError, match="no longer exists"):
+        plugin.invoke("select_session", {"session_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460"})
+
+
+def test_windows_launch_uses_official_specific_conversation_flag(tmp_path: Path):
+    """The launcher opens a new console for precisely the selected conversation."""
+    with (
+        patch("stream_micro.plugins.antigravity.os.name", "nt"),
+        patch("stream_micro.plugins.antigravity.resolve_agy_command", return_value=["agy.exe"]),
+        patch("stream_micro.plugins.antigravity.subprocess.Popen") as popen,
+    ):
+        launch_antigravity_session(
+            "de5c0341-9e8a-40d3-b93f-e87bc874a460", str(tmp_path), agy_path="agy"
+        )
+
+    assert popen.call_args.args[0] == [
+        "agy.exe",
+        "--conversation",
+        "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+    ]
+    assert popen.call_args.kwargs["cwd"] == str(tmp_path)
+    assert popen.call_args.kwargs["shell"] is False
+    assert popen.call_args.kwargs["creationflags"] != 0
+
+
+def test_idle_status_after_activity_stays_completed_until_selected(tmp_path: Path):
+    """An acknowledged completion returns to idle without retaining status input."""
+    directory = str(tmp_path)
+    conversation_id = "de5c0341-9e8a-40d3-b93f-e87bc874a460"
+    plugin = AntigravityPlugin({"enabled": True}, launcher=lambda _id, _cwd: None)
+    busy = {
+        "conversation_id": conversation_id,
+        "cwd": directory,
+        "agent_state": "working",
+        "tool_confirmation_pending": False,
+        "task_count": 1,
+        "quota": {},
+    }
+
+    plugin.handle_status(busy)
+    plugin.handle_status({**busy, "agent_state": "idle", "task_count": 0})
+
+    assert plugin.snapshot().sessions[0].state is SessionState.COMPLETED
+    plugin.invoke("select_session", {"session_id": conversation_id})
+    assert plugin.snapshot().sessions[0].state is SessionState.IDLE
 
 
 @pytest.mark.parametrize(
