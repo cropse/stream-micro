@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 MAX_VISIBLE_SESSIONS = 15
+MAX_CACHE_BYTES = 1024 * 1024
 DEFAULT_AGY_HOME = Path.home() / ".gemini" / "antigravity-cli"
 _ALLOWED_KEYS = frozenset({"enabled", "agy_path", "agy_home", "max_sessions"})
 _CONVERSATION_ID = re.compile(
@@ -55,14 +59,22 @@ def read_last_conversations(
     """Read only the documented Antigravity last-conversations cache."""
 
     try:
+        if path.stat().st_size > MAX_CACHE_BYTES:
+            return ()
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return ()
     if not isinstance(raw, dict):
         return ()
 
     sessions: list[AntigravityCacheSession] = []
-    for directory, conversation_id in raw.items():
+    ordered_entries = sorted(
+        raw.items(),
+        key=lambda entry: os.path.normcase(os.path.normpath(entry[0]))
+        if isinstance(entry[0], str)
+        else "",
+    )
+    for directory, conversation_id in ordered_entries:
         if (
             not isinstance(directory, str)
             or not Path(directory).is_absolute()
@@ -72,5 +84,35 @@ def read_last_conversations(
         ):
             continue
         sessions.append(AntigravityCacheSession(conversation_id, directory, 0.0))
-    sessions.sort(key=lambda session: os.path.normcase(os.path.normpath(session.directory)))
-    return tuple(sessions[:max_sessions])
+        if len(sessions) >= max_sessions:
+            break
+    return tuple(sessions)
+
+
+class AntigravityPlugin:
+    """Store the safe Antigravity provider contract for later lifecycle behavior."""
+
+    def __init__(
+        self,
+        config: dict[str, Any],
+        *,
+        launcher: Callable[[str, str | None], None] | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self.validate_config(config)
+        self.config = dict(config)
+        self._launcher = launcher
+        self._clock = clock
+        configured_home = self.config.get("agy_home")
+        self.home = (
+            Path(configured_home).expanduser()
+            if isinstance(configured_home, str)
+            else DEFAULT_AGY_HOME
+        )
+        self.cache_path = self.home / "cache" / "last_conversations.json"
+        self.max_sessions = int(self.config.get("max_sessions", MAX_VISIBLE_SESSIONS))
+
+    def validate_config(self, config: dict[str, Any]) -> None:
+        if not isinstance(config, dict):
+            raise AntigravityError("antigravity config must be a mapping")
+        validate_antigravity_config(config)
