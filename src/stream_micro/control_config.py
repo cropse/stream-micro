@@ -92,6 +92,12 @@ def default_control_config() -> ControlConfig:
                 "plugin_dir": None,
                 "max_sessions": 15,
             },
+            "antigravity": {
+                "enabled": False,
+                "agy_path": None,
+                "agy_home": None,
+                "max_sessions": 15,
+            },
         },
         buttons=tuple(buttons),
         session_window_bindings={},
