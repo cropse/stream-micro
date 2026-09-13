@@ -1,5 +1,7 @@
 # stream-micro
 
+![stream-micro Stream Deck agent control surface](docs/images/readme-cover.png)
+
 Local Agent Control Surface for **Elgato Stream Deck MK.2 only** (15 keys,
 5 × 3). It discovers a locally running OpenCode Server, renders the first five
 Sessions on the first row, and provides a local Dashboard at the same address.
@@ -76,6 +78,20 @@ Point `~/.claude/settings.json` at the bundled `scripts/report-quota.mjs` as
 shown in the companion integration README. After the first API response, the
 Bridge displays the official 5-hour and 7-day usage percentages and reset times
 on Claude Code quota keys and in the Dashboard.
+
+### Antigravity CLI Sessions
+
+The Antigravity integration supports the CLI only. On Windows, its default
+binary path is `%LOCALAPPDATA%\agy\bin\agy.exe`. Enable
+`plugins.antigravity` in the Dashboard or `bridge.yaml`; Stream Micro shows one
+latest cached session per workspace. Selecting a Session key opens a new
+Windows console and restores that exact selection with
+`agy --conversation <id>`.
+
+Setup requires the bundled Antigravity `statusLine` companion script so live
+state and quota can reach Bridge. Stream Micro reads or sends no prompts,
+history, transcripts, or credentials. If the CLI, cache, or status data is
+absent, the provider safely shows as unavailable.
 
 ## Verify
 

@@ -20,6 +20,7 @@ _STATUS_COLORS = {
 }
 
 _PROVIDER_STYLES = {
+    "antigravity": ("ANTIGRAVITY", "#17142c", "#6f5cff"),
     "claude_code": ("CLAUDE", "#251811", "#e28b67"),
     "codex": ("CODEX", "#0b1f1c", "#48e0b4"),
     "opencode": ("OPENCODE", "#142038", "#8aa7ff"),

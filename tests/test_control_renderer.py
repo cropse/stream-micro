@@ -75,6 +75,23 @@ def test_claude_code_session_uses_its_provider_accent() -> None:
     assert image.getpixel((10, 1)) == (226, 139, 103)
 
 
+def test_antigravity_session_uses_its_provider_accent() -> None:
+    image = render_control_key(
+        ButtonBinding(
+            key_index=0,
+            plugin="antigravity",
+            component="session",
+            action="select_session",
+        ),
+        AgentSession("session-1", "Antigravity task", SessionState.RUNNING, "project"),
+        selected=False,
+        size=(96, 96),
+        provider_id="antigravity",
+    )
+
+    assert image.getpixel((10, 1)) == (111, 92, 255)
+
+
 def test_codex_and_opencode_session_keys_have_distinct_provider_identity() -> None:
     session = AgentSession("thread-1", "Provider-specific chat", SessionState.IDLE, "repo")
     codex = render_control_key(

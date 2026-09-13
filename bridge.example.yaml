@@ -27,6 +27,11 @@ plugins:
     claude_home: null
     plugin_dir: null
     max_sessions: 15
+  antigravity:
+    enabled: false
+    agy_path: null
+    agy_home: null
+    max_sessions: 15
   codex:
     enabled: false
     codex_path: null
