@@ -1,13 +1,16 @@
 import json
+import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from stream_micro.control_config import default_control_config
 from stream_micro.bridge import BridgeService
 from stream_micro.control_config import (
     control_config_data,
+    default_control_config,
     parse_control_config,
     write_control_config,
 )
@@ -36,6 +39,91 @@ def test_companion_fixture_matches_plugin_contract():
     plugin = AntigravityPlugin({"enabled": True}, launcher=lambda _id, _cwd: None)
 
     assert plugin.handle_status(payload)["result"] == "status_updated"
+
+
+def test_companion_forwards_only_allowlisted_status_fields(monkeypatch: pytest.MonkeyPatch):
+    """The reporter must not send sensitive status-line fields to the Bridge."""
+    received: list[dict[str, object]] = []
+
+    class StatusHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            content_length = int(self.headers["content-length"])
+            received.append(json.loads(self.rfile.read(content_length)))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format: str, *_args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), StatusHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv(
+        "STREAM_MICRO_ANTIGRAVITY_STATUS_URL",
+        f"http://127.0.0.1:{server.server_port}/api/hooks/antigravity/status",
+    )
+    try:
+        result = subprocess.run(
+            ["node", "integrations/antigravity-stream-micro/scripts/report-status.mjs"],
+            input=json.dumps(
+                {
+                    "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+                    "cwd": "C:/work/project",
+                    "agent_state": "working",
+                    "tool_confirmation_pending": False,
+                    "task_count": 0,
+                    "quota": {},
+                    "transcript_path": "secret",
+                    "model": "sensitive-model",
+                }
+            ),
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            env=None,
+        )
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+    assert result.returncode == 0
+    assert result.stdout == "stream-micro: reported\n"
+    assert received == [
+        {
+            "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+            "cwd": "C:/work/project",
+            "agent_state": "working",
+            "tool_confirmation_pending": False,
+            "task_count": 0,
+            "quota": {},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "status_url, input_data",
+    [
+        ("http://127.0.0.1:1/api/hooks/antigravity/status", "{}"),
+        ("http://127.0.0.1:1/api/hooks/antigravity/status", "not json"),
+    ],
+)
+def test_companion_never_blocks_the_cli_on_reporting_failures(
+    monkeypatch: pytest.MonkeyPatch, status_url: str, input_data: str
+):
+    """Malformed input and unreachable Bridge reporting must exit successfully."""
+    monkeypatch.setenv("STREAM_MICRO_ANTIGRAVITY_STATUS_URL", status_url)
+
+    result = subprocess.run(
+        ["node", "integrations/antigravity-stream-micro/scripts/report-status.mjs"],
+        input=input_data,
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "stream-micro: unavailable\n"
 
 
 def test_bridge_registers_antigravity_only_when_enabled(tmp_path: Path):
@@ -156,7 +244,9 @@ def test_snapshot_rejects_directory_as_agy_executable(
         json.dumps({str(project): "de5c0341-9e8a-40d3-b93f-e87bc874a460"}), encoding="utf-8"
     )
     monkeypatch.setattr("stream_micro.plugins.antigravity.shutil.which", lambda _command: None)
-    plugin = AntigravityPlugin({"enabled": True, "agy_home": str(tmp_path), "agy_path": str(tmp_path)})
+    plugin = AntigravityPlugin(
+        {"enabled": True, "agy_home": str(tmp_path), "agy_path": str(tmp_path)}
+    )
 
     assert plugin.snapshot().health.connected is False
 

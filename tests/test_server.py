@@ -11,8 +11,8 @@ from stream_micro.control_config import (
     parse_control_config,
     write_control_config,
 )
-from stream_micro.plugins.claude_code import ClaudeCodePlugin
 from stream_micro.plugins.antigravity import AntigravityPlugin
+from stream_micro.plugins.claude_code import ClaudeCodePlugin
 from stream_micro.plugins.opencode import OpenCodePlugin
 from stream_micro.server import create_app
 

@@ -22,8 +22,8 @@ from .openchamber import (
     discover_openchamber_desktop,
     select_openchamber_session,
 )
-from .plugins.base import AgentSession, BridgePlugin, PluginSnapshot
 from .plugins.antigravity import AntigravityPlugin
+from .plugins.base import AgentSession, BridgePlugin, PluginSnapshot
 from .plugins.claude_code import ClaudeCodePlugin
 from .plugins.codex import CodexPlugin
 from .plugins.ollama_quota import OllamaQuotaPlugin
