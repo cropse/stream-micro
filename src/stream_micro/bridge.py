@@ -23,6 +23,7 @@ from .openchamber import (
     select_openchamber_session,
 )
 from .plugins.base import AgentSession, BridgePlugin, PluginSnapshot
+from .plugins.antigravity import AntigravityPlugin
 from .plugins.claude_code import ClaudeCodePlugin
 from .plugins.codex import CodexPlugin
 from .plugins.ollama_quota import OllamaQuotaPlugin
@@ -107,6 +108,9 @@ class BridgeService:
         claude_code = config.plugins.get("claude_code")
         if claude_code and claude_code.get("enabled", False):
             plugins["claude_code"] = ClaudeCodePlugin(claude_code)
+        antigravity = config.plugins.get("antigravity")
+        if antigravity and antigravity.get("enabled", False):
+            plugins["antigravity"] = AntigravityPlugin(antigravity)
         return plugins
 
     def config_data(self) -> dict[str, Any]:
@@ -420,6 +424,12 @@ class BridgeService:
         if not isinstance(plugin, ClaudeCodePlugin):
             raise BridgeError("Claude Code plugin is not enabled")
         return plugin.handle_quota(payload)
+
+    def handle_antigravity_status(self, payload: dict[str, Any]) -> dict[str, str | bool | None]:
+        plugin = self._plugin("antigravity")
+        if not isinstance(plugin, AntigravityPlugin):
+            raise BridgeError("Antigravity plugin is not enabled")
+        return plugin.handle_status(payload)
 
     def invoke(self, plugin_id: str, action: str, params: dict[str, Any]) -> Any:
         plugin = self._plugin(plugin_id)

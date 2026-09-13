@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from .bridge import BridgeError, BridgeService
 from .control_config import ControlConfigError
 from .device import DeviceError, discover_mk2_devices
+from .plugins.antigravity import AntigravityError
 from .plugins.claude_code import ClaudeCodeError
 from .plugins.codex import CodexError
 from .plugins.opencode import OpenCodeError
@@ -107,6 +108,13 @@ def create_app(config_path: Path | str, *, service: BridgeService | None = None)
         except (BridgeError, ClaudeCodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @app.post("/api/hooks/antigravity/status")
+    def post_antigravity_status(data: dict[str, Any]) -> dict[str, str | bool | None]:
+        try:
+            return service.handle_antigravity_status(data)
+        except (BridgeError, AntigravityError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.post("/api/opencode/sessions/{session_id}/capture-window")
     def capture_session_window(session_id: str) -> dict[str, str]:
         try:
@@ -142,14 +150,14 @@ def create_app(config_path: Path | str, *, service: BridgeService | None = None)
             raise HTTPException(status_code=422, detail="plugin, action, and params are required")
         try:
             return service.invoke(plugin, action, params)
-        except (BridgeError, ClaudeCodeError, CodexError, OpenCodeError) as exc:
+        except (BridgeError, AntigravityError, ClaudeCodeError, CodexError, OpenCodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/api/deck/keys/{key_index}/press")
     def post_deck_key_press(key_index: int) -> dict[str, Any]:
         try:
             return service.press_key(key_index)
-        except (BridgeError, ClaudeCodeError, CodexError, OpenCodeError) as exc:
+        except (BridgeError, AntigravityError, ClaudeCodeError, CodexError, OpenCodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/events")

@@ -12,6 +12,7 @@ from stream_micro.control_config import (
     write_control_config,
 )
 from stream_micro.plugins.claude_code import ClaudeCodePlugin
+from stream_micro.plugins.antigravity import AntigravityPlugin
 from stream_micro.plugins.opencode import OpenCodePlugin
 from stream_micro.server import create_app
 
@@ -117,6 +118,51 @@ def test_claude_code_quota_endpoint_updates_the_provider_snapshot(tmp_path: Path
     assert quota.json()["quota_updated"] is True
     assert snapshots.json()["claude_code"]["signals"]["primary_percent"] == 18.0
     assert snapshots.json()["claude_code"]["signals"]["secondary_label"] == "7D"
+
+
+def test_antigravity_status_endpoint_updates_snapshot(tmp_path: Path) -> None:
+    with app_with_plugin(tmp_path) as client:
+        service = cast(Any, client.app).state.bridge
+        service.plugins["antigravity"] = AntigravityPlugin(
+            {"enabled": True}, launcher=lambda _id, _cwd: None
+        )
+        response = client.post(
+            "/api/hooks/antigravity/status",
+            json={
+                "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+                "cwd": str(tmp_path),
+                "agent_state": "working",
+                "tool_confirmation_pending": False,
+                "task_count": 0,
+                "quota": {},
+            },
+        )
+        snapshots = client.get("/api/plugins/snapshots")
+
+    assert response.status_code == 200
+    assert snapshots.json()["antigravity"]["sessions"][0]["state"] == "running"
+
+
+def test_antigravity_status_endpoint_rejects_sensitive_fields(tmp_path: Path) -> None:
+    with app_with_plugin(tmp_path) as client:
+        service = cast(Any, client.app).state.bridge
+        service.plugins["antigravity"] = AntigravityPlugin(
+            {"enabled": True}, launcher=lambda _id, _cwd: None
+        )
+        response = client.post(
+            "/api/hooks/antigravity/status",
+            json={
+                "conversation_id": "de5c0341-9e8a-40d3-b93f-e87bc874a460",
+                "cwd": str(tmp_path),
+                "agent_state": "idle",
+                "tool_confirmation_pending": False,
+                "task_count": 0,
+                "quota": {},
+                "transcript_path": "secret",
+            },
+        )
+
+    assert response.status_code == 422
 
 
 def test_config_api_never_returns_persisted_cookie_and_blank_save_preserves_it(
