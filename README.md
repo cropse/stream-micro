@@ -111,6 +111,58 @@ shown in the companion integration README. After the first API response, the
 Bridge displays the official 5-hour and 7-day usage percentages and reset times
 on Claude Code quota keys and in the Dashboard.
 
+### Usage API quota (optional)
+
+Disabled by default and configured in the Dashboard's Configuration page.
+`http_quota` reads quota from any service that reports usage as JSON over
+HTTPS, one source per account; on a quota key, pick the source as its
+**Account** (and an optional **Label**) in Buttons.
+
+- **Presets** need only a key: `openrouter` (an API key's spending limit),
+  `openrouter_credits` (account credits; OpenRouter may require a management
+  key) and `ollama` (Ollama Cloud's included monthly credits from the
+  documented `/api/balance`, with an ollama.com API key; an easier
+  alternative to the legacy `ollama_quota` session cookie).
+- **Custom** sources name where the numbers are with JSON paths such as
+  `data.limit`, `items.0.used` or `limits[type=TOKENS,unit=3].percentage`
+  (the first list item whose fields match). A row reads a used or remaining
+  percentage (`fraction: true` for 0–1), or a used or remaining amount with a
+  `limit`, plus an optional reset time (ISO text or epoch seconds or
+  milliseconds). Up to two rows per key.
+- Keys are stored like the Ollama cookie and never returned to the Dashboard;
+  `api_key_env` reads one from an environment variable instead. URLs must use
+  `https://` (plain HTTP only to this machine) and may not carry keys. When
+  saving through `PUT /api/config` yourself, send back the
+  `api_key_configured: true` you read with a blank key to keep the saved one;
+  without it the key is cleared, as for the Ollama cookie. A source moved to
+  another host keeps neither its saved key nor its `api_key_env`: enter them
+  again for the new host.
+- Last-seen numbers are kept in `.state/` next to `bridge.yaml`; while a source
+  is unreachable its keys show them in grey, and a window whose reset time has
+  passed is hidden rather than shown as refilled.
+
+```yaml
+plugins:
+  http_quota:
+    enabled: true
+    sources:
+      - id: openrouter
+        preset: openrouter
+        api_key: null             # set it in the Dashboard (stored, never shown)
+      - id: my-service
+        label: MY API
+        url: https://api.example.com/v1/usage
+        api_key_env: MY_API_KEY   # or read the key from an environment variable
+        auth_scheme: Bearer       # "" sends the bare key; auth_header renames the header
+        windows:
+          - label: 5H
+            used_percent: data.five_hour.used_percent
+            reset_at: data.five_hour.resets_at
+          - label: WEEK
+            used: data.week.used
+            limit: data.week.limit
+```
+
 ## Verify
 
 ```powershell

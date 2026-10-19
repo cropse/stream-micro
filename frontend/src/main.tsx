@@ -23,6 +23,29 @@ type OllamaQuotaConfig = {
 };
 type CodexConfig = { enabled?: boolean; codex_path?: string | null; codex_home?: string | null };
 type ClaudeCodeConfig = { enabled?: boolean; claude_path?: string | null; claude_home?: string | null; plugin_dir?: string | null; max_sessions?: number };
+type UsageWindow = {
+  label?: string;
+  used_percent?: string;
+  remaining_percent?: string;
+  used?: string;
+  remaining?: string;
+  limit?: string;
+  fraction?: boolean;
+  reset_at?: string;
+};
+type UsageSource = {
+  id: string;
+  label?: string | null;
+  preset?: string;
+  url?: string | null;
+  api_key?: string | null;
+  api_key_configured?: boolean;
+  api_key_env?: string | null;
+  auth_header?: string | null;
+  auth_scheme?: string | null;
+  windows?: UsageWindow[];
+};
+type HttpQuotaConfig = { enabled?: boolean; sources?: UsageSource[]; refresh_interval_seconds?: number };
 type OpenCodeConfig = { enabled?: boolean; endpoints?: string[]; password_env?: string | null };
 type PluginConfig = { enabled?: boolean; [key: string]: unknown };
 type QuotaDisplay = "remaining" | "used";
@@ -34,11 +57,49 @@ type Config = {
 type Session = { id: string; title: string; state: string; project: string | null; directory?: string | null };
 type PluginManifest = { id: string; name: string; components: string[]; actions: string[] };
 type PluginHealth = { connected: boolean; detail: string; endpoint?: string | null };
+type QuotaSignals = Record<string, string | number | boolean | null>;
+type QuotaAccount = { id: string; title: string; provider: string; signals?: QuotaSignals | null; error?: string | null };
 type PluginSnapshot = {
   health: PluginHealth;
   sessions?: Session[];
-  signals?: Record<string, string | number | boolean | null> | null;
+  signals?: QuotaSignals | null;
+  accounts?: QuotaAccount[];
 };
+
+// The account a quota key stores, by id.
+function findAccount(snapshot: PluginSnapshot | undefined, key: unknown) {
+  if (typeof key !== "string" || !key) return undefined;
+  const wanted = key.toLowerCase();
+  return snapshot?.accounts?.find((account) => account.id.toLowerCase() === wanted);
+}
+
+// What a quota key will show, decided the same way as the Deck renderer
+// (quota_source in control_renderer.py): account choice, errors, last-seen data.
+function quotaPreview(button: Button | undefined, snapshot: PluginSnapshot | undefined) {
+  const customLabel = typeof button?.action_params.label === "string" ? button.action_params.label : "";
+  const accountKey = button?.action_params.account;
+  let signals: QuotaSignals | null = snapshot?.signals ?? null;
+  let problem: string | null = null;
+  let title = "";
+  if (!snapshot) {
+    problem = "No data";
+  } else if ((snapshot.accounts?.length ?? 0) > 0 || accountKey) {
+    const account = findAccount(snapshot, accountKey);
+    if (typeof accountKey !== "string" || !accountKey) problem = "Choose an account";
+    else if (!account) problem = snapshot.health.connected ? "Account not found" : snapshot.health.detail;
+    else {
+      title = account.title;
+      signals = account.signals ?? null;
+      if (!signals) problem = account.error || "No quota data";
+    }
+  } else if (!snapshot.health.connected && !signals?.stale) {
+    problem = snapshot.health.detail;
+  }
+  const used = [signals?.primary_percent, signals?.session_percent, signals?.secondary_percent, signals?.weekly_percent]
+    .find((value): value is number => typeof value === "number");
+  if (!problem && used === undefined) problem = "No quota data";
+  return { title: customLabel || title, problem, used, stale: Boolean(signals?.stale) };
+}
 type BridgeStatus = {
   selected_session_id?: string | null;
   selected_session_ids?: Record<string, string>;
@@ -104,7 +165,7 @@ function quotaShown(usedPct: number, display: QuotaDisplay) {
 const STALE_COLOR = "#6f8099";
 
 function UsageBars({ signals, generic = false, display = "remaining" }: {
-  signals: Record<string, string | number | boolean | null>;
+  signals: QuotaSignals;
   generic?: boolean;
   display?: QuotaDisplay;
 }) {
@@ -273,6 +334,160 @@ function ClaudeCodeCard({ config, snapshot, updateConfig }: {
     <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>recent Claude Code Sessions available to button zones</span></div>
     {snapshot?.signals && <UsageBars signals={snapshot.signals} generic display={config?.stream_deck.quota_display ?? "remaining"} />}
     <p className="provider-note">Session state comes from the running Claude process and its transcript, so it works without setup; the companion hook adds an exact WAIT when Claude needs your approval. SUB means the turn ended but subagents or other agents still work for it. Quota appears after Claude Code's status line receives its first API response.</p>
+  </section>;
+}
+
+// Known usage APIs; the Bridge fills in URL and fields for these (http_quota PRESETS).
+const USAGE_PRESETS: { id: string; name: string; hint: string }[] = [
+  { id: "openrouter", name: "OpenRouter key limit", hint: "Any OpenRouter API key that has a spending limit." },
+  { id: "openrouter_credits", name: "OpenRouter credits", hint: "Account credits; OpenRouter may require a management key." },
+  { id: "ollama", name: "Ollama Cloud credits", hint: "An ollama.com API key (Settings → Keys). Reading the balance uses no credits; no cookie needed." },
+  { id: "custom", name: "Custom JSON API", hint: "Any HTTPS endpoint that returns usage as JSON." },
+];
+const WINDOW_MODES: { id: keyof UsageWindow; name: string; fields: (keyof UsageWindow)[] }[] = [
+  { id: "used_percent", name: "Used %", fields: ["used_percent"] },
+  { id: "remaining_percent", name: "Remaining %", fields: ["remaining_percent"] },
+  { id: "used", name: "Used / limit", fields: ["used", "limit"] },
+  { id: "remaining", name: "Remaining / limit", fields: ["remaining", "limit"] },
+];
+
+function windowMode(window: UsageWindow): keyof UsageWindow {
+  if (window.remaining_percent !== undefined) return "remaining_percent";
+  if (window.used !== undefined) return "used";
+  if (window.remaining !== undefined) return "remaining";
+  return "used_percent";
+}
+
+function HttpQuotaCard({ config, snapshot, updateConfig }: {
+  config: Config | null;
+  snapshot?: PluginSnapshot;
+  updateConfig: (change: (current: Config) => Config) => void;
+}) {
+  const pluginConfig = config?.plugins?.http_quota as HttpQuotaConfig | undefined;
+  const sources = pluginConfig?.sources ?? [];
+  const display = config?.stream_deck.quota_display ?? "remaining";
+  const setFields = (fields: Partial<HttpQuotaConfig>) => {
+    updateConfig((current) => ({
+      ...current,
+      plugins: { ...current.plugins, http_quota: { ...current.plugins.http_quota, ...fields } },
+    }));
+  };
+  const setSources = (next: UsageSource[]) => setFields({ sources: next });
+  const setSource = (index: number, fields: Partial<UsageSource>) => setSources(sources.map((source, at) => at === index ? { ...source, ...fields } : source));
+  const freeId = (base: string) => {
+    const taken = new Set(sources.map((source) => source.id));
+    let id = base;
+    for (let n = 2; taken.has(id); n += 1) id = `${base}-${n}`;
+    return id;
+  };
+  const setWindows = (index: number, windows: UsageWindow[]) => setSource(index, { windows });
+  const setWindow = (index: number, at: number, fields: Partial<UsageWindow>) => {
+    const windows = [...(sources[index].windows ?? [])];
+    windows[at] = { ...windows[at], ...fields };
+    setWindows(index, windows);
+  };
+  // Switching what a row reads clears its path: the old one meant something else.
+  const setWindowMode = (index: number, at: number, mode: keyof UsageWindow) => {
+    const { used_percent: _used, remaining_percent: _left, used: _amount, remaining: _rest, limit, ...rest } = sources[index].windows?.[at] ?? {};
+    const next: UsageWindow = { ...rest, [mode]: "" };
+    if (mode === "used" || mode === "remaining") next.limit = limit ?? "";
+    const windows = [...(sources[index].windows ?? [])];
+    windows[at] = next;
+    setWindows(index, windows);
+  };
+  return <section className="panel provider-card usage-card">
+    <p>USAGE APIS</p>
+    <h2>Quota from a usage API</h2>
+    <label className="toggle-field"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setFields({ enabled: event.target.checked })} /> Enable usage API quota provider</label>
+    <p className="ollama-hint">One source per account: pick the service and paste its key. Keys stay in the local Bridge and are never returned to this page. Then choose the source as the Account of a Usage Api quota key in Buttons.</p>
+    {sources.map((source, index) => {
+      const preset = USAGE_PRESETS.find((item) => item.id === (source.preset || "custom")) ?? USAGE_PRESETS[USAGE_PRESETS.length - 1];
+      const custom = preset.id === "custom";
+      const windows = source.windows ?? [];
+      const account = snapshot?.accounts?.find((item) => item.id === source.id);
+      const advanced = <>
+        <label>URL
+          <input type="text" placeholder={custom ? "https://api.example.com/usage" : "Preset default"} value={source.url ?? ""} onChange={(event) => setSource(index, { url: event.target.value || null })} />
+        </label>
+        <p className="ollama-hint">Never put a key in the URL. Pointing a source at another host asks for its key again.</p>
+        <div className="usage-row">
+          <label>Key header
+            <input type="text" placeholder="Authorization" value={source.auth_header ?? ""} onChange={(event) => setSource(index, { auth_header: event.target.value || null })} />
+          </label>
+          <label>Key format
+            <select value={source.auth_scheme === "" ? "bare" : source.auth_scheme ? "bearer" : "default"} onChange={(event) => setSource(index, { auth_scheme: event.target.value === "bare" ? "" : event.target.value === "bearer" ? "Bearer" : null })}>
+              <option value="default">{custom ? "Bearer <key> (default)" : "Preset default"}</option>
+              <option value="bearer">Bearer &lt;key&gt;</option>
+              <option value="bare">&lt;key&gt; only</option>
+            </select>
+          </label>
+        </div>
+        <label>Key from environment variable
+          <input type="text" placeholder="Optional, e.g. OPENROUTER_API_KEY" value={source.api_key_env ?? ""} onChange={(event) => setSource(index, { api_key_env: event.target.value || null })} />
+        </label>
+        <p className="ollama-hint">{custom ? "Where the numbers are in the JSON reply" : "Rows replace the preset's rows when added"}: paths like <code>data.limit</code>, <code>items.0.used</code> or <code>limits[type=TOKENS,unit=3].percentage</code>. Reset times may be ISO text or epoch seconds/milliseconds.</p>
+        {[0, 1].map((at) => {
+          const window = windows[at];
+          if (!window) {
+            return at === windows.length ? <button key={at} type="button" className="link-button" onClick={() => setWindow(index, at, { label: at === 0 ? "5H" : "WEEK", used_percent: "" })}>{at === 0 ? "Add top row" : "Add bottom row"}</button> : null;
+          }
+          const mode = windowMode(window);
+          const fields = WINDOW_MODES.find((item) => item.id === mode)?.fields ?? ["used_percent"];
+          return <fieldset key={at} className="usage-window">
+            <legend>{at === 0 ? "Top row" : "Bottom row"} · <button type="button" className="link-button" onClick={() => setWindows(index, windows.filter((_, other) => other !== at))}>Remove</button></legend>
+            <div className="usage-row">
+              <label>Label
+                <input type="text" maxLength={8} placeholder="5H" value={window.label ?? ""} onChange={(event) => setWindow(index, at, { label: event.target.value })} />
+              </label>
+              <label>Numbers
+                <select value={mode} onChange={(event) => setWindowMode(index, at, event.target.value as keyof UsageWindow)}>
+                  {WINDOW_MODES.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
+            </div>
+            {fields.map((field) => <label key={field}>{`${field.replace("_", " ")} path`}
+              <input type="text" value={String(window[field] ?? "")} onChange={(event) => setWindow(index, at, { [field]: event.target.value })} />
+            </label>)}
+            {(mode === "used_percent" || mode === "remaining_percent") && <label className="toggle-field"><input type="checkbox" checked={window.fraction ?? false} onChange={(event) => setWindow(index, at, { fraction: event.target.checked })} /> Value is a fraction (0–1)</label>}
+            <label>Reset time path
+              <input type="text" placeholder="Optional" value={window.reset_at ?? ""} onChange={(event) => setWindow(index, at, { reset_at: event.target.value })} />
+            </label>
+          </fieldset>;
+        })}
+      </>;
+      return <div key={index} className="account-item usage-source">
+        <div className="usage-row">
+          <label>Service
+            <select value={preset.id} onChange={(event) => setSource(index, event.target.value === "custom" ? { preset: "custom", windows: windows.length ? windows : [{ label: "5H", used_percent: "" }] } : { preset: event.target.value, url: null, auth_header: null, auth_scheme: null, windows: [] })}>
+              {USAGE_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+          <label>Label
+            <input type="text" maxLength={16} placeholder="Shown on the key" value={source.label ?? ""} onChange={(event) => setSource(index, { label: event.target.value || null })} />
+          </label>
+        </div>
+        <label>API key
+          <input
+            type="password"
+            placeholder={source.api_key_configured ? "Key saved — enter a new value to replace it" : "Paste the API key"}
+            value={source.api_key ?? ""}
+            onChange={(event) => setSource(index, { api_key: event.target.value })}
+          />
+        </label>
+        <p className="ollama-hint">{preset.hint} {source.api_key_configured && <button type="button" className="link-button" onClick={() => setSource(index, { api_key: "", api_key_configured: false })}>Forget saved key</button>}</p>
+        {custom ? advanced : <details className="ollama-advanced"><summary>Advanced settings</summary>{advanced}</details>}
+        <div className="usage-row usage-footer">
+          <label>Source ID (the key's Account)
+            <input type="text" maxLength={32} value={source.id} readOnly={source.api_key_configured === true} title={source.api_key_configured === true ? "Saved sources keep their ID; change the Label instead" : undefined} onChange={(event) => setSource(index, { id: event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "") })} />
+          </label>
+          <button type="button" className="link-button" onClick={() => setSources(sources.filter((_, other) => other !== index))}>Remove source</button>
+        </div>
+        {account && <small>{account.error ? account.error : account.signals?.stale ? "Last seen, not current" : "Current"}</small>}
+        {account?.signals && <UsageBars signals={account.signals} generic display={display} />}
+      </div>;
+    })}
+    <button type="button" onClick={() => setSources([...sources, { id: freeId("openrouter"), preset: "openrouter", api_key: "" }])}>Add source</button>
+    {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
   </section>;
 }
 
@@ -656,6 +871,14 @@ function App() {
     });
   };
 
+  // Merge one quota display option (account, label) into action_params.
+  const setQuotaOption = (name: "account" | "label", value: string) => {
+    const params = { ...(selectedBinding?.action_params ?? {}) };
+    if (value) params[name] = value;
+    else delete params[name];
+    updateBinding({ action_params: params });
+  };
+
   const save = async () => {
     if (!config || !dirtyRef.current) return;
     try {
@@ -717,13 +940,12 @@ function App() {
             const isChild = parent !== undefined && parent.key_index !== index;
             const isParent = parent !== undefined && parent.key_index === index;
             const isQuota = button?.component === "quota";
-            const quotaPercent = snapshot?.signals?.primary_percent ?? snapshot?.signals?.session_percent ?? snapshot?.signals?.secondary_percent ?? snapshot?.signals?.weekly_percent;
-            const label = session?.title ?? (isQuota ? `${displayName(pluginId)} quota` : isChild ? "Session slot" : displayName(button?.component ?? null));
+            const quota = isQuota ? quotaPreview(button, snapshot) : undefined;
+            const label = session?.title ?? (quota ? quota.title || `${displayName(pluginId)} quota` : isChild ? "Session slot" : displayName(button?.component ?? null));
             const sublabel = session ? `${displayName(pluginId)} · ${session.project ?? "No project"}` : isChild ? `${displayName(pluginId)} · slot ${index - (parent?.key_index ?? 0) + 1}` : pluginId ? displayName(pluginId) : "Unassigned";
             const quotaDisplay = config?.stream_deck.quota_display ?? "remaining";
-            const quotaStale = Boolean(snapshot?.signals?.stale);
-            const state = session?.state ?? (isQuota && typeof quotaPercent === "number" ? `${quotaShown(quotaPercent, quotaDisplay).text}${quotaStale ? " (last seen)" : ""}` : snapshot && !snapshot.health.connected ? snapshot.health.detail : isQuota ? "No quota data" : button?.action ? displayName(button.action) : "No action");
-            const stateColor = !session && isQuota && typeof quotaPercent === "number" ? quotaStale ? STALE_COLOR : pctColor(quotaPercent) : undefined;
+            const state = session?.state ?? (quota ? quota.problem ?? `${quotaShown(quota.used ?? 0, quotaDisplay).text}${quota.stale ? " (last seen)" : ""}` : snapshot && !snapshot.health.connected ? snapshot.health.detail : button?.action ? displayName(button.action) : "No action");
+            const stateColor = !session && quota && !quota.problem ? quota.stale ? STALE_COLOR : pctColor(quota.used) : undefined;
             const isPinned = status?.pinned_sessions?.[String(index)]?.plugin === pluginId;
             return <button
               key={index}
@@ -766,7 +988,25 @@ function App() {
               <input type="number" min={1} max={15 - editingKey} value={selectedBinding?.span ?? 1} onChange={(event) => changeSpan(Number(event.target.value))} />
             </label>
           )}
-          {selectedBinding?.component === "quota" ? <p className="editor-hint">Quota keys only display usage; pressing them does nothing.</p> : <label>Physical-key action
+          {selectedBinding?.component === "quota" ? (() => {
+            const quotaSnapshot = selectedBinding.plugin ? snapshots[selectedBinding.plugin] : undefined;
+            const accounts = quotaSnapshot?.accounts ?? [];
+            const savedAccount = typeof selectedBinding.action_params.account === "string" ? selectedBinding.action_params.account : "";
+            const known = findAccount(quotaSnapshot, savedAccount);
+            return <>
+              {(accounts.length > 0 || savedAccount) && <label>Account
+                <select value={known?.id ?? savedAccount} onChange={(event) => setQuotaOption("account", event.target.value)}>
+                  <option value="">Choose an account</option>
+                  {accounts.map((account) => <option key={account.id} value={account.id}>{account.title} · {account.id}{account.signals?.stale ? " (last seen)" : ""}</option>)}
+                  {savedAccount && !known && <option value={savedAccount}>{savedAccount} (not found right now)</option>}
+                </select>
+              </label>}
+              <label>Label
+                <input type="text" maxLength={16} placeholder={known?.title ?? `${displayName(selectedBinding.plugin)} quota`} value={typeof selectedBinding.action_params.label === "string" ? selectedBinding.action_params.label : ""} onChange={(event) => setQuotaOption("label", event.target.value)} />
+              </label>
+              <p className="editor-hint">Quota keys only display usage; pressing them does nothing.</p>
+            </>;
+          })() : <label>Physical-key action
             <select disabled={!selectedManifest} value={selectedBinding?.action ?? ""} onChange={(event) => updateBinding({ action: event.target.value || null, action_params: {} })}>
               <option value="">No action</option>
               {selectedManifest?.actions.map((action) => <option key={action} value={action}>{displayName(action)}</option>)}
@@ -838,6 +1078,7 @@ function App() {
         <CodexCard config={config} snapshot={snapshots.codex} updateConfig={updateConfig} />
         <ClaudeCodeCard config={config} snapshot={snapshots.claude_code} updateConfig={updateConfig} />
         <OllamaQuotaCard config={config} snapshot={snapshots.ollama_quota} updateConfig={updateConfig} />
+        <HttpQuotaCard config={config} snapshot={snapshots.http_quota} updateConfig={updateConfig} />
       </div>
     </section>}
   </main>;

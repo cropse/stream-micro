@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from PIL import Image, ImageDraw
 
 from .control_config import ButtonBinding
-from .plugins.base import AgentSession, PluginSnapshot, SessionState
+from .plugins.base import AgentSession, PluginSnapshot, QuotaAccount, SessionState
 from .renderer import _font
 from .timeparse import parse_timestamp
 
@@ -41,6 +41,7 @@ _PROVIDER_STYLES = {
     "codex": ("CODEX", "#0b1f1c", "#48e0b4"),
     "opencode": ("OPENCODE", "#142038", "#8aa7ff"),
     "ollama_quota": ("OLLAMA", "#181a2b", "#b69cff"),
+    "http_quota": ("USAGE", "#14181f", "#f2b880"),
 }
 
 QUOTA_DISPLAY_MODES = ("remaining", "used")
@@ -305,6 +306,47 @@ def quota_windows(signals: Mapping[str, object]) -> list[QuotaWindow]:
     return windows
 
 
+def select_account(snapshot: PluginSnapshot, key: str) -> QuotaAccount | None:
+    """The account a quota key stores, by id."""
+
+    wanted = key.strip().lower()
+    return next((account for account in snapshot.accounts if account.id.lower() == wanted), None)
+
+
+@dataclass(frozen=True)
+class QuotaSource:
+    """What one quota key draws: signals, or why there are none."""
+
+    signals: Mapping[str, object] | None
+    problem: str | None
+    title: str | None
+    style: str | None
+
+
+def quota_source(binding: ButtonBinding, snapshot: PluginSnapshot | None) -> QuotaSource:
+    """Pick the signals for a quota key, choosing an account when the source has several."""
+
+    if snapshot is None:
+        return QuotaSource(None, "No data", None, binding.plugin)
+    account_key = binding.action_params.get("account") if binding.action_params else None
+    if snapshot.accounts or account_key:
+        if not isinstance(account_key, str) or not account_key:
+            return QuotaSource(None, "Pick an account", None, binding.plugin)
+        account = select_account(snapshot, account_key)
+        if account is None:
+            connected = snapshot.health.connected
+            detail = "Account not found" if connected else snapshot.health.detail
+            return QuotaSource(None, detail, None, binding.plugin)
+        if not account.signals:
+            problem = account.error or "No quota data"
+            return QuotaSource(None, problem, account.title, binding.plugin)
+        return QuotaSource(account.signals, None, account.title, binding.plugin)
+    signals = snapshot.signals
+    if not snapshot.health.connected and not (signals and signals.get("stale")):
+        return QuotaSource(None, snapshot.health.detail, None, binding.plugin)
+    return QuotaSource(signals, None, None, binding.plugin)
+
+
 def _quota_color(remaining: float) -> str:
     """Colour by how much is left, whichever number the key shows."""
 
@@ -428,22 +470,30 @@ def render_quota_key(
 
     width, height = size
     scale = height / 72
-    provider_label, background, provider_accent = _provider_style(binding.plugin)
+    source = quota_source(binding, snapshot)
+    provider_label, background, provider_accent = _provider_style(source.style)
     image = Image.new("RGB", size, background)
     draw = ImageDraw.Draw(image)
 
-    label = f"{provider_label} QUOTA"
+    custom_label = binding.action_params.get("label") if binding.action_params else None
+    if isinstance(custom_label, str) and custom_label.strip():
+        label = custom_label.strip().upper()
+    else:
+        label = source.title or f"{provider_label} QUOTA"
     title_size = max(9, round(10 * scale))
-    if draw.textlength(label, font=_font(max(6, round(7 * scale)), bold=True)) > width - 4:
-        label = provider_label  # e.g. "OPENCODE" rather than "OPENCODE Q…"
+    default_label = label == f"{provider_label} QUOTA"
+    if default_label and draw.textlength(label, font=_font(max(6, round(7 * scale)), bold=True)) > (
+        width - 4
+    ):
+        # e.g. "OPENCODE" rather than "OPENCODE Q…"; a chosen label is kept and fitted.
+        label = provider_label
     draw.rectangle((0, 0, width - 1, max(2, height // 24)), fill=provider_accent)
-    signals = (snapshot.signals or {}) if snapshot is not None else {}
-    windows = quota_windows(signals)
+    windows = quota_windows(source.signals or {})
     # Last-seen numbers whose source is unreachable are drawn grey, so they are
     # never mistaken for current quota.
-    stale = bool(signals.get("stale"))
+    stale = bool(source.signals and source.signals.get("stale"))
 
-    if snapshot is None or not windows or not (snapshot.health.connected or stale):
+    if source.problem is not None or not windows:
         error_title_font = _fit_font(draw, label, title_size, 7, width - 4)
         draw.text(
             (width // 2, height * 0.22),
@@ -454,12 +504,7 @@ def render_quota_key(
             font=error_title_font,
         )
         detail_font = _font(max(8, round(9 * scale)), bold=True)
-        if snapshot is None:
-            message = "No data"
-        elif snapshot.health.connected:
-            message = "No quota data"
-        else:
-            message = snapshot.health.detail
+        message = source.problem or "No quota data"
         detail, _cut = _wrap_lines(draw, message.upper(), detail_font, width - 6, 3)
         draw.multiline_text(
             (width // 2, height * 0.57),

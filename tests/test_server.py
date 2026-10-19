@@ -374,3 +374,169 @@ def test_only_the_bridge_page_may_save_settings(tmp_path: Path) -> None:
         headers = {"Origin": "http://evil.example:8766"}  # its own Host, but not loopback
         assert client.put("/api/config", json=data, headers=headers).status_code == 403
 
+
+def test_layout_only_save_keeps_quota_workers(tmp_path: Path, monkeypatch) -> None:
+    import stream_micro.bridge as bridge_module
+    from stream_micro.plugins.http_quota import HttpQuotaPlugin
+
+    requests: list[httpx.Request] = []
+
+    def offline(config):  # no worker thread, no real network
+        return HttpQuotaPlugin(
+            config,
+            client=httpx.Client(transport=httpx.MockTransport(requests.append)),
+            start_thread=False,
+        )
+
+    monkeypatch.setattr(bridge_module, "HttpQuotaPlugin", offline)
+    config_path = tmp_path / "control.yaml"
+    write_control_config(config_path, default_control_config())
+    app = create_app(config_path)
+    service = cast(BridgeService, app.state.bridge)
+    with TestClient(app) as client:
+        data = client.get("/api/config").json()
+        data["plugins"]["http_quota"] = {
+            "enabled": True,
+            "sources": [{"id": "or", "preset": "openrouter", "api_key": "k"}],
+        }
+        assert client.put("/api/config", json=data).status_code == 200
+        provider = service.plugins["http_quota"]
+        assert str(getattr(provider, "cache_path", "")).endswith(
+            str(Path(".state") / "http_quota.json")
+        )
+
+        data = client.get("/api/config").json()
+        data["stream_deck"]["brightness"] = 55
+        assert client.put("/api/config", json=data).status_code == 200
+        assert service.plugins["http_quota"] is provider
+
+        data = client.get("/api/config").json()
+        data["plugins"]["http_quota"]["refresh_interval_seconds"] = 120
+        assert client.put("/api/config", json=data).status_code == 200
+        assert service.plugins["http_quota"] is not provider
+    service.close()
+    assert requests == []
+
+
+def test_usage_api_keys_never_reach_the_browser_and_blank_save_keeps_them(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "control.yaml"
+    data = control_config_data(default_control_config())
+    data["plugins"]["http_quota"] = {
+        "enabled": False,
+        "sources": [
+            {"id": "limit", "preset": "openrouter", "api_key": "first-secret"},
+            {"id": "credits", "preset": "openrouter_credits", "api_key": "second-secret"},
+        ],
+    }
+    write_control_config(config_path, parse_control_config(data))
+    app = create_app(config_path)
+    service = cast(BridgeService, app.state.bridge)
+    with TestClient(app) as client:
+        response = client.get("/api/config")
+        assert "first-secret" not in response.text and "second-secret" not in response.text
+        public = response.json()
+        sources = public["plugins"]["http_quota"]["sources"]
+        assert [source["api_key_configured"] for source in sources] == [True, True]
+
+        # Reordered, one forgotten, one new: keys follow the source id.
+        sources.reverse()
+        sources[1]["api_key_configured"] = False
+        sources.append({"id": "or", "preset": "openrouter", "api_key": "third-secret"})
+        assert client.put("/api/config", json=public).status_code == 200
+
+    saved = {
+        source["id"]: source["api_key"]
+        for source in service.config.plugins["http_quota"]["sources"]
+    }
+    assert saved == {"credits": "second-secret", "limit": None, "or": "third-secret"}
+    assert "api_key_configured" not in config_path.read_text(encoding="utf-8")
+
+
+def test_invalid_usage_source_is_rejected_before_saving(tmp_path: Path) -> None:
+    config_path = tmp_path / "control.yaml"
+    write_control_config(config_path, default_control_config())
+    app = create_app(config_path)
+    before = config_path.read_text(encoding="utf-8")
+    with TestClient(app) as client:
+        public = client.get("/api/config").json()
+        public["plugins"]["http_quota"]["sources"] = [
+            {"id": "x", "url": "http://plain.example/usage", "windows": [{"used_percent": "a"}]}
+        ]
+        response = client.put("/api/config", json=public)
+    assert response.status_code == 422
+    assert "https" in response.text
+    assert config_path.read_text(encoding="utf-8") == before
+
+
+def test_a_saved_usage_key_never_follows_a_source_to_another_host(tmp_path: Path) -> None:
+    config_path = tmp_path / "control.yaml"
+    data = control_config_data(default_control_config())
+    data["plugins"]["http_quota"] = {
+        "enabled": False,
+        "sources": [
+            {"id": "same", "preset": "openrouter", "api_key": "kept-secret"},
+            {"id": "moved", "preset": "openrouter", "api_key": "moved-secret"},
+        ],
+    }
+    write_control_config(config_path, parse_control_config(data))
+    app = create_app(config_path)
+    service = cast(BridgeService, app.state.bridge)
+    with TestClient(app) as client:
+        public = client.get("/api/config").json()
+        sources = public["plugins"]["http_quota"]["sources"]
+        sources[0]["url"] = "https://openrouter.ai/api/v1/key?period=month"  # same host
+        sources[1]["url"] = "https://other.example/usage"  # another host
+        assert client.put("/api/config", json=public).status_code == 200
+
+    saved = {
+        source["id"]: source["api_key"]
+        for source in service.config.plugins["http_quota"]["sources"]
+    }
+    assert saved == {"same": "kept-secret", "moved": None}
+
+
+def test_a_key_variable_never_follows_a_source_to_another_host(tmp_path: Path) -> None:
+    config_path = tmp_path / "control.yaml"
+    data = control_config_data(default_control_config())
+    data["plugins"]["http_quota"] = {
+        "enabled": False,
+        "sources": [
+            {"id": "same", "preset": "openrouter", "api_key_env": "SAME_KEY"},
+            {"id": "moved", "preset": "openrouter", "api_key_env": "MOVED_KEY"},
+            {"id": "renamed", "preset": "openrouter", "api_key_env": "OLD_KEY"},
+        ],
+    }
+    write_control_config(config_path, parse_control_config(data))
+    app = create_app(config_path)
+    service = cast(BridgeService, app.state.bridge)
+    with TestClient(app) as client:
+        public = client.get("/api/config").json()
+        sources = public["plugins"]["http_quota"]["sources"]
+        sources[0]["url"] = "https://openrouter.ai:443/api/v1/key"  # same host, default port
+        sources[1]["url"] = "https://other.example/usage"  # another host, same variable
+        sources[2]["url"] = "https://other.example/usage"  # another host, named again
+        sources[2]["api_key_env"] = "NEW_KEY"
+        assert client.put("/api/config", json=public).status_code == 200
+
+    saved = {
+        source["id"]: source.get("api_key_env")
+        for source in service.config.plugins["http_quota"]["sources"]
+    }
+    assert saved == {"same": "SAME_KEY", "moved": None, "renamed": "NEW_KEY"}
+
+
+def test_a_bad_disabled_usage_source_says_why_it_blocks_the_save(tmp_path: Path) -> None:
+    config_path = tmp_path / "control.yaml"
+    write_control_config(config_path, default_control_config())
+    app = create_app(config_path)
+    with TestClient(app) as client:
+        public = client.get("/api/config").json()
+        public["plugins"]["http_quota"] = {
+            "enabled": False,
+            "sources": [{"id": "x", "preset": "nope"}],
+        }
+        response = client.put("/api/config", json=public)
+    assert response.status_code == 422
+    assert "checked even while disabled" in response.text

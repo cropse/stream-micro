@@ -15,6 +15,9 @@ from typing import Any
 import yaml
 
 MK2_KEY_COUNT = 15
+# Display options a display-only quota key may keep in action_params:
+# "account" picks one account of a multi-account source, "label" renames the key.
+QUOTA_DISPLAY_PARAMS = frozenset({"account", "label"})
 SCHEMA_VERSION = 1
 
 
@@ -89,6 +92,7 @@ def default_control_config() -> ControlConfig:
                 "refresh_interval_seconds": 60.0,
             },
             "codex": {"enabled": False, "codex_path": None, "codex_home": None},
+            "http_quota": {"enabled": False, "sources": []},
             "claude_code": {
                 "enabled": False,
                 "claude_path": None,
@@ -239,7 +243,20 @@ def validate_control_config(config: ControlConfig) -> None:
             raise ControlConfigError(
                 f"buttons[{binding.key_index}] must define component when plugin is set"
             )
-        if binding.action_params and binding.action is None:
+        if binding.component == "quota" and binding.action is None:
+            # Display-only quota keys may carry their display options here.
+            unknown = sorted(set(binding.action_params) - QUOTA_DISPLAY_PARAMS)
+            if unknown:
+                raise ControlConfigError(
+                    f"buttons[{binding.key_index}] quota keys accept only "
+                    f"{', '.join(sorted(QUOTA_DISPLAY_PARAMS))}, not {', '.join(unknown)}"
+                )
+            for name, value in binding.action_params.items():
+                if not isinstance(value, str):
+                    raise ControlConfigError(
+                        f"buttons[{binding.key_index}].action_params.{name} must be text"
+                    )
+        elif binding.action_params and binding.action is None:
             raise ControlConfigError(
                 f"buttons[{binding.key_index}] action_params require an action"
             )

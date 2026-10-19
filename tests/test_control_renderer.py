@@ -388,3 +388,55 @@ def test_a_reset_known_only_as_a_date_shows_no_invented_time() -> None:
     )
     assert windows[0].date_only
 
+
+def _accounts_snapshot(connected: bool = True) -> PluginSnapshot:
+    from stream_micro.plugins.base import QuotaAccount
+
+    return PluginSnapshot(
+        PluginHealth(connected, "1 of 2 source(s) current"),
+        accounts=(
+            QuotaAccount(
+                "openrouter", "OPENROUTER", "openrouter",
+                {"primary_percent": 60.0, "primary_label": "LIMIT"},
+            ),
+            QuotaAccount("team-api", "TEAM API", "custom", None, "key rejected"),
+        ),
+    )
+
+
+def test_quota_source_picks_the_stored_account_by_id() -> None:
+    from stream_micro.control_renderer import quota_source
+
+    def key(**params) -> ButtonBinding:
+        return ButtonBinding(
+            key_index=10, plugin="http_quota", component="quota", action_params=params
+        )
+
+    found = quota_source(key(account="OpenRouter"), _accounts_snapshot())
+    assert found.signals is not None and found.signals["primary_percent"] == 60.0
+    assert (found.title, found.style) == ("OPENROUTER", "http_quota")
+    assert quota_source(key(account="team-api"), _accounts_snapshot()).problem == "key rejected"
+    assert quota_source(key(account="other"), _accounts_snapshot()).problem == "Account not found"
+    assert quota_source(key(), _accounts_snapshot()).problem == "Pick an account"
+
+
+def test_custom_label_on_an_account_quota_key() -> None:
+    binding = ButtonBinding(
+        key_index=10, plugin="http_quota", component="quota",
+        action_params={"account": "openrouter", "label": "My key"},
+    )
+    image = render_quota_key(binding, _accounts_snapshot(), size=(72, 72))
+    assert image.getpixel((36, 1)) == (242, 184, 128)  # the provider's accent
+
+
+def test_a_chosen_label_is_fitted_not_replaced() -> None:
+    def key(label: str) -> Image.Image:
+        binding = ButtonBinding(
+            key_index=10, plugin="http_quota", component="quota",
+            action_params={"account": "openrouter", "label": label},
+        )
+        return render_quota_key(binding, _accounts_snapshot(), size=(72, 72))
+
+    # Too wide for the title row at its normal size, it is shrunk or cut,
+    # never swapped for the provider's name ("USAGE").
+    assert key("MY PERSONAL KEY").tobytes() != key("USAGE").tobytes()

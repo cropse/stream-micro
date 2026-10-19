@@ -28,6 +28,9 @@ plugins:
     claude_home: null
     plugin_dir: null
     max_sessions: 15
+  http_quota:
+    enabled: false
+    sources: []
   codex:
     enabled: false
     codex_path: null

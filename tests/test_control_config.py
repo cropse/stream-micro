@@ -102,3 +102,21 @@ def test_quota_keys_cover_exactly_one_key() -> None:
                           "span": 2}
     with pytest.raises(ControlConfigError, match="one key"):
         parse_control_config(data)
+
+
+def test_quota_keys_accept_only_text_account_and_label_options() -> None:
+    data = control_config_data(default_control_config())
+    data["buttons"] = list(data["buttons"])
+    data["buttons"][5] = {
+        **data["buttons"][5],
+        "plugin": "ollama_quota",
+        "component": "quota",
+        "action": None,
+        "action_params": {"account": "codex-a.json", "label": "Codex 1"},
+    }
+    parse_control_config(data)
+
+    for bad in ({"account": ["a", "b"]}, {"label": {"text": "x"}}, {"command": "rm"}):
+        data["buttons"][5]["action_params"] = bad
+        with pytest.raises(ControlConfigError):
+            parse_control_config(data)

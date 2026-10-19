@@ -28,6 +28,12 @@ from .openchamber import (
 from .plugins.base import AgentSession, BridgePlugin, PluginSnapshot
 from .plugins.claude_code import ClaudeCodePlugin
 from .plugins.codex import CodexPlugin
+from .plugins.http_quota import (
+    HttpQuotaError,
+    HttpQuotaPlugin,
+    source_origin,
+    validate_http_quota_config,
+)
 from .plugins.ollama_quota import OllamaQuotaPlugin
 from .plugins.opencode import OpenCodePlugin
 from .windows import (
@@ -69,7 +75,9 @@ class BridgeService:
         # the providers it replaced; interleaved saves could close a live one.
         self._save_lock = threading.Lock()
         self.openchamber = None if plugins is not None else discover_openchamber_desktop()
-        self.plugins = plugins or self._build_plugins(self.config, self.openchamber)
+        self.plugins = plugins or self._build_plugins(
+            self.config, self.openchamber, state_dir=self.state_dir
+        )
         self.selected_session_id: str | None = None
         self.selected_session_ids: dict[str, str] = {}
         self.pending_window_bindings: dict[str, dict[str, str]] = {}
@@ -90,11 +98,18 @@ class BridgeService:
         self._openchamber_last_attempt = 0.0
         self._logger = logging.getLogger(__name__)
 
+    @property
+    def state_dir(self) -> Path:
+        """Where providers keep last-seen data, next to this Bridge's config."""
+
+        return self.config_path.parent / ".state"
+
     @staticmethod
     def _build_plugins(
         config: ControlConfig,
         openchamber: OpenChamberDesktop | None = None,
         *,
+        state_dir: Path | None = None,
         previous: tuple[ControlConfig, dict[str, BridgePlugin]] | None = None,
     ) -> dict[str, BridgePlugin]:
         """Build enabled providers, reusing ones whose settings did not change.
@@ -118,6 +133,11 @@ class BridgeService:
                     return
             plugins[plugin_id] = created[plugin_id] = build()
 
+        def with_cache(settings: dict[str, Any], name: str) -> dict[str, Any]:
+            if settings.get("cache_path") or state_dir is None:
+                return dict(settings)
+            return {**settings, "cache_path": str(state_dir / name)}
+
         try:
             open_code = config.plugins.get("opencode")
             if open_code and open_code.get("enabled", True):
@@ -137,6 +157,24 @@ class BridgeService:
             claude_code = config.plugins.get("claude_code")
             if claude_code and claude_code.get("enabled", False):
                 add("claude_code", lambda: ClaudeCodePlugin(claude_code))
+            # Optional quota sources: validated even while disabled, started
+            # only when enabled.
+            http_quota = config.plugins.get("http_quota")
+            if http_quota is not None:
+                try:
+                    validate_http_quota_config(http_quota)
+                except HttpQuotaError as exc:
+                    if http_quota.get("enabled", False):
+                        raise
+                    raise HttpQuotaError(
+                        f"{exc} (usage API sources are checked even while disabled; "
+                        "fix or remove that source)"
+                    ) from exc
+                if http_quota.get("enabled", False):
+                    add(
+                        "http_quota",
+                        lambda: HttpQuotaPlugin(with_cache(http_quota, "http_quota.json")),
+                    )
         except Exception:
             # Do not leak providers (e.g. a started Codex app-server) built before
             # a later provider rejected its settings; reused ones keep running.
@@ -156,6 +194,13 @@ class BridgeService:
             cookie = ollama.get("cookie_value")
             ollama["cookie_configured"] = isinstance(cookie, str) and bool(cookie)
             ollama["cookie_value"] = ""
+        http_quota = data.get("plugins", {}).get("http_quota")
+        sources = http_quota.get("sources") if isinstance(http_quota, dict) else None
+        for source in sources if isinstance(sources, list) else []:
+            if isinstance(source, dict):
+                key = source.get("api_key")
+                source["api_key_configured"] = isinstance(key, str) and bool(key)
+                source["api_key"] = ""
         return data
 
     def replace_config(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -171,13 +216,50 @@ class BridgeService:
                 existing = self.config.plugins.get("ollama_quota", {}).get("cookie_value")
                 if isinstance(existing, str) and existing:
                     ollama["cookie_value"] = existing
+        http_quota = normalized.get("plugins", {}).get("http_quota")
+        sources = http_quota.get("sources") if isinstance(http_quota, dict) else None
+        if isinstance(sources, list):
+            # Like the Ollama cookie, per source: a blank key keeps the saved key
+            # of the source with that id; api_key_configured: false clears it.
+            # A key is never carried over to another host: a changed URL or
+            # service must be given its key again.
+            saved_sources = self.config.plugins.get("http_quota", {}).get("sources")
+            saved = {
+                item.get("id"): item
+                for item in (saved_sources if isinstance(saved_sources, list) else [])
+                if isinstance(item, dict)
+            }
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                configured = source.pop("api_key_configured", False)
+                before = saved.get(source.get("id"))
+                origin = source_origin(before) if before is not None else None
+                same_host = origin is not None and origin == source_origin(source)
+                if (
+                    before is not None
+                    and not same_host
+                    and source.get("api_key_env")
+                    and source.get("api_key_env") == before.get("api_key_env")
+                ):
+                    # The variable named for the old host is not sent to a new one
+                    # unless it is named again for it.
+                    source["api_key_env"] = None
+                if source.get("api_key"):
+                    continue
+                existing = before.get("api_key") if before is not None else None
+                keep = configured is True and same_host and isinstance(existing, str)
+                source["api_key"] = existing if keep and existing else None
         config = parse_control_config(normalized)
         # Build (and so validate) the new providers before touching the saved
         # file, so an invalid provider setting leaves the running Bridge as-is.
         old_plugins = self.plugins
         try:
             plugins = self._build_plugins(
-                config, self.openchamber, previous=(self.config, old_plugins)
+                config,
+                self.openchamber,
+                state_dir=self.state_dir,
+                previous=(self.config, old_plugins),
             )
         except (ValueError, RuntimeError) as exc:
             raise ControlConfigError(str(exc)) from exc

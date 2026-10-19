@@ -208,3 +208,13 @@ select:disabled { cursor: not-allowed; opacity: .6; }
 .deck-key em.state-chip, .session-item em.state-chip { display: inline-block; width: auto; padding: 1px 5px; border-radius: 4px; letter-spacing: .06em; }
 .stale-note { grid-column: 1 / -1; color: #8292aa; }
 .cookie-steps { margin: 8px 0 0; padding-left: 18px; color: #9eb0c9; font-size: 12px; line-height: 1.55; }
+.account-list { display: grid; gap: 10px; margin-top: 10px; }
+.account-item { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid #263044; border-radius: 8px; }
+.account-item small { color: #8292aa; }
+.link-button { padding: 0; border: 0; background: none; color: #69efc9; font: inherit; text-decoration: underline; cursor: pointer; }
+.warning-field { color: #fbbf24; }
+.usage-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; align-items: end; }
+.usage-window { border: 1px solid #263044; border-radius: 8px; padding: 8px 10px; display: grid; gap: 8px; margin: 10px 0 0; }
+.usage-window legend { color: #9eb0c9; font-size: 12px; padding: 0 4px; }
+.usage-source { gap: 10px; }
+.usage-footer { justify-items: start; }
