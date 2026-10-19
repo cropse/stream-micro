@@ -48,6 +48,16 @@ QUOTA_DISPLAY_MODES = ("remaining", "used")
 _STALE_COLOR = "#6f8099"
 
 
+def _text_on(color: str) -> str:
+    """Dark text on a light strip, light text on a dark one."""
+
+    try:
+        red, green, blue = (int(color[i : i + 2], 16) for i in (1, 3, 5))
+    except ValueError:
+        return "#08131f"
+    return "#08131f" if 0.299 * red + 0.587 * green + 0.114 * blue > 140 else "#f1f5f9"
+
+
 def _provider_style(plugin_id: str | None) -> tuple[str, str, str]:
     if plugin_id in _PROVIDER_STYLES:
         return _PROVIDER_STYLES[plugin_id]
@@ -164,39 +174,50 @@ def render_control_key(
     pinned: bool = False,
     size: tuple[int, int],
     provider_id: str | None = None,
+    accent_color: str | None = None,
+    state_colors: Mapping[str, str] | None = None,
+    accent_line: bool = True,
 ) -> Image.Image:
+    """``accent_line`` lets Session keys drop the provider line; others keep it."""
+
     _provider_label, provider_background, provider_accent = _provider_style(
         provider_id or binding.plugin
     )
+    provider_accent = accent_color or binding.accent or provider_accent
     background = provider_background if session else "#101827"
     image = Image.new("RGB", size, background)
     draw = ImageDraw.Draw(image)
     width, height = size
     scale = height / 72
+    line = accent_line or session is None
     accent = max(2, height // 24)
     if session:
-        # The provider's line stays along the top edge as on every other key;
+        # The provider's accent runs along the top edge as on every other key;
         # the state strip sits right under it, where it is seen first.
-        draw.rectangle((0, 0, width - 1, accent), fill=provider_accent)
-        status_top = accent + 1
+        # As thick as on quota keys (rows 0..accent).
+        if line:
+            draw.rectangle((0, 0, width - 1, accent), fill=provider_accent)
+        status_top = accent + 1 if line else 0
         status_bottom = status_top + round(height * 0.19) - 1
-        draw.rectangle(
-            (0, status_top, width - 1, status_bottom),
-            fill=_STATUS_COLORS.get(session.state, "#ffffff"),
-        )
+        custom = (state_colors or {}).get(session.state.value)
+        strip = custom or _STATUS_COLORS.get(session.state, "#ffffff")
+        draw.rectangle((0, status_top, width - 1, status_bottom), fill=strip)
         draw.text(
             (width // 2, (status_top + status_bottom) // 2 + 1),
             _SHORT_STATE.get(session.state, session.state.value.upper()),
             anchor="mm",
-            fill="#dcfce7" if session.state in _DARK_STATUS else "#08131f",
+            fill=_text_on(custom)
+            if custom
+            else ("#dcfce7" if session.state in _DARK_STATUS else "#08131f"),
             font=_font(round(11 * scale), bold=True),
         )
+        accent_bottom = status_bottom
 
         title_font, title_text = None, ""
         project_y = round(height * 0.87)
-        # The title fills the space between the state strip and the project
-        # line, leaving a blank row above the project name.
-        title_top, title_bottom = status_bottom + 1, project_y - round(7 * scale)
+        # The title fills the space between the accent and the project line,
+        # leaving a blank row above the project name.
+        title_top, title_bottom = accent_bottom + 1, project_y - round(7 * scale)
         title_height = title_bottom - title_top
 
         def fits_height(text: str, font) -> bool:
@@ -234,7 +255,8 @@ def render_control_key(
             font=project_font,
         )
     else:
-        draw.rectangle((0, 0, width - 1, accent), fill=provider_accent)
+        if line:
+            draw.rectangle((0, 0, width - 1, accent), fill=provider_accent)
         label = (binding.component or "empty").replace("_", " ").upper()
         draw.text(
             (width // 2, height * 0.46),
@@ -297,9 +319,10 @@ def quota_windows(signals: Mapping[str, object]) -> list[QuotaWindow]:
         if value != value or value in (float("inf"), float("-inf")):
             continue
         reset = signals.get(f"{prefix}_reset_at", signals.get(f"{legacy}_reset_at"))
+        label = str(signals.get(f"{prefix}_label") or fallback).upper()
         windows.append(
             QuotaWindow(
-                str(signals.get(f"{prefix}_label") or fallback).upper(),
+                _SHORT_WINDOW_LABELS.get(label, label),
                 float(min(max(value, 0), 100)),
                 reset if isinstance(reset, str) and reset else None,
                 _money_text(
@@ -312,6 +335,8 @@ def quota_windows(signals: Mapping[str, object]) -> list[QuotaWindow]:
 
 
 _CURRENCY_SIGNS = {"CNY": "¥", "USD": "$", "EUR": "€", "JPY": "¥"}
+# Every key names its window the same short way: 5H, 7D, MO.
+_SHORT_WINDOW_LABELS = {"WEEK": "7D", "WEEKLY": "7D", "WK": "7D", "MONTH": "MO", "MONTHLY": "MO"}
 
 
 def _money_text(amount: object, currency: object) -> str | None:
@@ -444,22 +469,30 @@ def _quota_row(
     number_size: int,
     scale: float,
     max_width: int,
+    label_cap: int | None = None,
 ):
     """Fit ``<label> <number>`` on one row: shrink the label, then the number.
+
+    ``label_cap`` keeps the label no larger than another row's, so both rows
+    of a key show their labels at one size.
 
     The big number matters most, so the window label gives way first; a label
     that still does not fit is truncated rather than drawn off the key.
     """
 
     gap = max(2, round(3 * scale))
-    label_size = round(10 * scale)
+    label_size = round(10 * scale) if label_cap is None else min(round(10 * scale), label_cap)
     minimum_label = max(6, round(7 * scale))
     minimum_number = max(9, round(12 * scale))
+    # Size as if the number were the widest percentage, so "80%" and "100%"
+    # keys draw the same label and number sizes; only wider text shrinks more.
+    probe = _font(number_size, bold=True)
+    sizing = max((number, "100%"), key=lambda text: draw.textlength(text, font=probe))
 
     def widths(label_font, number_font) -> tuple[int, int]:
         return (
             round(draw.textlength(window_label, font=label_font)),
-            round(draw.textlength(number, font=number_font)),
+            round(draw.textlength(sizing, font=number_font)),
         )
 
     label_font = _font(label_size, bold=True)
@@ -476,7 +509,17 @@ def _quota_row(
     if label_width + gap + number_width > max_width:
         window_label = _fit_text(draw, window_label, label_font, max_width - gap - number_width)
         label_width = round(draw.textlength(window_label, font=label_font))
-    return window_label, label_font, label_width, number_font, number_width, gap, number_size
+    number_width = round(draw.textlength(number, font=number_font))  # centre the real text
+    return (
+        window_label,
+        label_font,
+        label_width,
+        number_font,
+        number_width,
+        gap,
+        number_size,
+        label_size,
+    )
 
 
 def render_quota_key(
@@ -496,6 +539,7 @@ def render_quota_key(
     scale = height / 72
     source = quota_source(binding, snapshot)
     provider_label, background, provider_accent = _provider_style(source.style)
+    provider_accent = binding.accent or provider_accent
     image = Image.new("RGB", size, background)
     draw = ImageDraw.Draw(image)
 
@@ -511,6 +555,7 @@ def render_quota_key(
     ):
         # e.g. "OPENCODE" rather than "OPENCODE Q…"; a chosen label is kept and fitted.
         label = provider_label
+    # Quota keys always carry their provider line.
     draw.rectangle((0, 0, width - 1, max(2, height // 24)), fill=provider_accent)
     windows = quota_windows(source.signals or {})
     # Last-seen numbers whose source is unreachable are drawn grey, so they are
@@ -556,6 +601,21 @@ def render_quota_key(
         if len(windows) == 1
         else [(round(19 * scale), round(24 * scale)), (round(16 * scale), round(46 * scale))]
     )
+    # Both rows' labels at the size the tightest row allows.
+    label_cap = min(
+        (
+            _quota_row(
+                draw,
+                window.label,
+                window.amount_text or f"{window.shown(display):.0f}%",
+                size_px,
+                scale,
+                width - 6,
+            )[7]
+            for window, (size_px, _center) in zip(windows, rows, strict=False)
+        ),
+        default=round(10 * scale),
+    )
     for window, (size_px, center_y) in zip(windows, rows, strict=False):
         shown = window.shown(display)
         color = _STALE_COLOR if stale else _quota_color(window.remaining)
@@ -568,7 +628,8 @@ def render_quota_key(
             number_width,
             gap,
             size_px,
-        ) = _quota_row(draw, window.label, number, size_px, scale, width - 6)
+            _label_size,
+        ) = _quota_row(draw, window.label, number, size_px, scale, width - 6, label_cap)
         left = (width - label_width - gap - number_width) // 2
         draw.text((left, center_y), window_label, anchor="lm", fill="#dce6f6", font=label_font)
         draw.text(

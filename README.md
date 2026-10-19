@@ -68,6 +68,28 @@ stream_deck:
   quota_display: used  # remaining (default) | used
 ```
 
+Every key names its windows the same short way (`5H`, `7D`, `MO`) on the
+number's row, and keys draw their labels and numbers at one size whatever the
+digits, so an `80%` key and a `100%` key line up.
+
+### Colours
+
+Every key carries its provider's colour as a line along the top edge; on a
+Session key the state strip sits right under it. In Buttons you can pick a
+key's colour (a Session zone shares one), change the colour of any Session
+state (`RUN`, `SUB`, `WAIT`, `DONE`, `IDLE`, `ERR`, `OFF`), and turn the line
+off for Session keys; quota keys always keep it. The preview changes at once,
+the Deck after Save:
+
+```yaml
+stream_deck:
+  state_colors: {completed: "#ffffff", waiting: "#ffc15a"}
+  session_accent_line: true
+buttons:
+  - key_index: 5
+    accent: "#e28b67"
+```
+
 ## Plugins
 
 Plugins expose a manifest, configuration validation, a status snapshot, and a

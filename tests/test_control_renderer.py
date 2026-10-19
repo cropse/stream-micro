@@ -1,3 +1,4 @@
+import pytest
 from PIL import Image, ImageDraw
 
 from stream_micro.control_config import ButtonBinding
@@ -185,7 +186,7 @@ def test_quota_rows_stay_inside_a_72px_key() -> None:
         for value in ("0%", "9%", "99%", "100%"):
             for size in (22, 19, 16):
                 fitted = _quota_row(draw, label, value, size, 1.0, 66)
-                _label, _lf, label_width, _nf, number_width, gap, _size = fitted
+                _label, _lf, label_width, _nf, number_width, gap, _size, _ls = fitted
                 assert label_width + gap + number_width <= 66, (label, value, size)
 
     image = render_quota_key(
@@ -462,3 +463,98 @@ def test_an_empty_balance_has_no_minus_sign_and_a_debt_puts_it_first() -> None:
     assert _money_text(-1.234, "USD") == "-$1.23"
     assert _money_text(64.0, "CNY") == "¥64.0"
 
+
+def test_custom_state_and_accent_colours_are_drawn() -> None:
+    from stream_micro.control_config import ButtonBinding
+    from stream_micro.control_renderer import render_control_key
+    from stream_micro.plugins.base import AgentSession, SessionState
+
+    session = AgentSession(id="s1", title="Demo", state=SessionState.COMPLETED, project="app")
+    binding = ButtonBinding(
+        key_index=0, plugin="claude_code", component="session", accent="#ff00ff"
+    )
+    image = render_control_key(
+        binding,
+        session,
+        selected=False,
+        size=(72, 72),
+        state_colors={"completed": "#123456"},
+    )
+    assert image.getpixel((36, 0)) == (0xFF, 0x00, 0xFF)  # the accent, on top
+    assert image.getpixel((2, 6)) == (0x12, 0x34, 0x56)  # the state strip under it
+
+
+def test_colours_must_be_hex() -> None:
+    import pytest
+
+    from stream_micro.control_config import (
+        ControlConfigError,
+        control_config_data,
+        default_control_config,
+        parse_control_config,
+    )
+
+    data = control_config_data(default_control_config())
+    data["stream_deck"]["state_colors"] = {"completed": "#00ff00"}
+    data["buttons"][5]["accent"] = "#AbCdEf"
+    parse_control_config(data)
+    for change in (
+        lambda d: d["stream_deck"].__setitem__("state_colors", {"done": "#00ff00"}),
+        lambda d: d["stream_deck"].__setitem__("state_colors", {"idle": "green"}),
+        lambda d: d["buttons"][5].__setitem__("accent", "#12345"),
+    ):
+        bad = control_config_data(default_control_config())
+        change(bad)
+        with pytest.raises(ControlConfigError):
+            parse_control_config(bad)
+
+
+def test_window_labels_are_short_and_the_same_everywhere() -> None:
+    from stream_micro.control_renderer import quota_windows
+
+    labels = [
+        quota_windows({"primary_percent": 1, "primary_label": label})[0].label
+        for label in ("WEEK", "WK", "MONTH", "5H", "7D")
+    ]
+    assert labels == ["7D", "7D", "MO", "5H", "7D"]
+
+
+def test_label_and_number_sizes_do_not_depend_on_the_digits() -> None:
+    from PIL import Image, ImageDraw
+
+    from stream_micro.control_renderer import _quota_row
+
+    draw = ImageDraw.Draw(Image.new("RGB", (72, 72)))
+    short = _quota_row(draw, "5H", "80%", 19, 1.0, 66)
+    full = _quota_row(draw, "5H", "100%", 19, 1.0, 66)
+    assert short[7] == full[7]  # label size
+    assert short[6] == full[6]  # number size
+
+
+@pytest.mark.parametrize("line", [True, False])
+def test_session_keys_may_drop_the_top_line_but_quota_keys_keep_it(line: bool) -> None:
+    from stream_micro.control_config import ButtonBinding
+    from stream_micro.control_renderer import render_control_key, render_quota_key
+    from stream_micro.plugins.base import (
+        AgentSession,
+        PluginHealth,
+        PluginSnapshot,
+        SessionState,
+    )
+
+    accent = (226, 139, 103)
+    session = render_control_key(
+        ButtonBinding(key_index=0, plugin="claude_code", component="session"),
+        AgentSession("s", "t", SessionState.RUNNING, "p"),
+        selected=False,
+        size=(72, 72),
+        provider_id="claude_code",
+        accent_line=line,
+    )
+    quota = render_quota_key(
+        ButtonBinding(key_index=0, plugin="claude_code", component="quota"),
+        PluginSnapshot(PluginHealth(True, "ok"), signals={"primary_percent": 10}),
+        size=(72, 72),
+    )
+    assert (session.getpixel((36, 0)) == accent) is line
+    assert quota.getpixel((36, 0)) == accent

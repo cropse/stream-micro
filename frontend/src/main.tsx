@@ -11,6 +11,7 @@ type Button = {
   action: string | null;
   action_params: Record<string, unknown>;
   window_binding: Record<string, string> | null;
+  accent?: string | null;
 };
 type OllamaQuotaConfig = {
   enabled?: boolean;
@@ -50,7 +51,7 @@ type OpenCodeConfig = { enabled?: boolean; endpoints?: string[]; password_env?: 
 type PluginConfig = { enabled?: boolean; [key: string]: unknown };
 type QuotaDisplay = "remaining" | "used";
 type Config = {
-  stream_deck: { brightness: number; device_serial: string | null; quota_display?: QuotaDisplay };
+  stream_deck: { brightness: number; device_serial: string | null; quota_display?: QuotaDisplay; state_colors?: Record<string, string>; session_accent_line?: boolean };
   plugins: Record<string, PluginConfig>;
   buttons: Button[];
 };
@@ -139,8 +140,68 @@ function sessionStateColor(state: string) {
   return SESSION_STATE_COLORS[state] ?? "#71819a";
 }
 
-function sessionStateChip(state: string) {
+// The words the physical keys show (control_renderer._SHORT_STATE).
+const SESSION_STATE_WORDS: Record<string, string> = {
+  idle: "IDLE",
+  running: "RUN",
+  background: "SUB",
+  waiting: "WAIT",
+  completed: "DONE",
+  error: "ERR",
+  disconnected: "OFF",
+};
+
+function sessionStateWord(state: string) {
+  return SESSION_STATE_WORDS[state] ?? state.toUpperCase();
+}
+
+// Dark text on a light colour, light text on a dark one (as on the keys).
+function textOn(color: string) {
+  const [red, green, blue] = [1, 3, 5].map((at) => parseInt(color.slice(at, at + 2), 16));
+  if ([red, green, blue].some((value) => Number.isNaN(value))) return "#08131f";
+  return 0.299 * red + 0.587 * green + 0.114 * blue > 140 ? "#08131f" : "#f1f5f9";
+}
+
+function sessionStateChip(state: string, custom?: Record<string, string>) {
+  const color = custom?.[state];
+  if (color) return { background: color, color: textOn(color) };
   return { background: sessionStateColor(state), color: DARK_SESSION_STATES.has(state) ? "#dcfce7" : "#08131f" };
+}
+
+// Each provider's key look (control_renderer._PROVIDER_STYLES): accent and background.
+const PROVIDER_ACCENTS: Record<string, string> = {
+  claude_code: "#e28b67",
+  codex: "#48e0b4",
+  opencode: "#8aa7ff",
+  ollama_quota: "#b69cff",
+  http_quota: "#f2b880",
+};
+const PROVIDER_BACKGROUNDS: Record<string, string> = {
+  claude_code: "#251811",
+  codex: "#0b1f1c",
+  opencode: "#142038",
+  ollama_quota: "#181a2b",
+  http_quota: "#14181f",
+};
+const SESSION_STATE_ORDER = ["running", "background", "waiting", "completed", "idle", "error", "disconnected"];
+// Swatches that read well on the dark keys.
+const COLOR_SWATCHES = ["#4a9eff", "#8aa7ff", "#b794ff", "#48e0b4", "#4de57a", "#166534", "#ffc15a", "#f2b880", "#e28b67", "#ff7983", "#ffffff", "#8292aa"];
+
+function ColorPicker({ value, isDefault, onPick, onReset, label }: {
+  value: string;
+  isDefault: boolean;
+  onPick: (color: string) => void;
+  onReset: () => void;
+  label: string;
+}) {
+  const current = value.toLowerCase();
+  return <div className="color-picker" role="group" aria-label={label}>
+    {COLOR_SWATCHES.map((color) => <button key={color} type="button" className={`swatch${current === color ? " is-on" : ""}`} style={{ background: color }} aria-label={color} aria-pressed={current === color} onClick={() => onPick(color)} />)}
+    <label className="swatch swatch-custom" title="Custom colour">
+      <input type="color" value={value} aria-label="Custom colour" onChange={(event) => onPick(event.target.value)} />
+    </label>
+    {!isDefault && <button type="button" className="link-button" onClick={onReset}>Reset to default colour</button>}
+  </div>;
 }
 
 function formatReset(value: string | number | boolean | null | undefined) {
@@ -165,6 +226,12 @@ function quotaShown(usedPct: number, display: QuotaDisplay) {
 
 const STALE_COLOR = "#6f8099";
 
+// The keys' short window names (control_renderer._SHORT_WINDOW_LABELS).
+const SHORT_WINDOW_LABELS: Record<string, string> = { WEEK: "7D", WEEKLY: "7D", WK: "7D", MONTH: "MO", MONTHLY: "MO" };
+function shortLabel(label: string) {
+  return SHORT_WINDOW_LABELS[label.toUpperCase()] ?? label;
+}
+
 // Balances show money left (control_renderer._money_text uses the same signs).
 const CURRENCY_SIGNS: Record<string, string> = { CNY: "¥", USD: "$", EUR: "€", JPY: "¥" };
 function moneyText(amount: unknown, currency: unknown) {
@@ -188,8 +255,8 @@ function UsageBars({ signals, generic = false, display = "remaining" }: {
   // Last-seen numbers from an unreachable source are grey, never green.
   const stale = Boolean(signals.stale);
   const tint = (used: number | null | undefined) => stale ? STALE_COLOR : pctColor(used);
-  const primaryLabel = generic ? String(signals.primary_label ?? "Primary") : "Session";
-  const secondaryLabel = generic ? String(signals.secondary_label ?? "Secondary") : "Weekly";
+  const primaryLabel = generic ? shortLabel(String(signals.primary_label ?? "Primary")) : "Session";
+  const secondaryLabel = generic ? shortLabel(String(signals.secondary_label ?? "Secondary")) : "Weekly";
   return <div className={`ollama-usage-grid${stale ? " is-stale" : ""}`}>
     {stale && <small className="stale-note">Last seen{typeof signals.seen_at === "string" ? ` ${formatReset(signals.seen_at)}` : ""} — the source is not reachable now.</small>}
     <div className="usage-bar">
@@ -714,6 +781,7 @@ function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  const [editingState, setEditingState] = useState<string | null>(null);
   const updateConfig = (change: (current: Config) => Config) => {
     setConfig((current) => (current ? change(current) : current));
     dirtyRef.current = true;
@@ -1035,6 +1103,15 @@ function App() {
     }
   };
 
+  const stateColors = config?.stream_deck.state_colors ?? {};
+  const sessionLine = config?.stream_deck.session_accent_line ?? true;
+  const setStateColor = (state: string, color: string | null) => updateConfig((current) => {
+    const next = { ...(current.stream_deck.state_colors ?? {}) };
+    if (color) next[state] = color; else delete next[state];
+    return { ...current, stream_deck: { ...current.stream_deck, state_colors: next } };
+  });
+  const resetStateColors = () => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, state_colors: {} } }));
+
   const save = async () => {
     if (!config || !dirtyRef.current) return;
     try {
@@ -1103,7 +1180,15 @@ function App() {
             const state = session?.state ?? (quota ? quota.problem ?? `${quota.amount ?? quotaShown(quota.used ?? 0, quotaDisplay).text}${quota.stale ? " (last seen)" : ""}` : snapshot && !snapshot.health.connected ? snapshot.health.detail : button?.action ? displayName(button.action) : "No action");
             const stateColor = !session && quota && !quota.problem ? quota.stale ? STALE_COLOR : pctColor(quota.used) : undefined;
             const isPinned = status?.pinned_sessions?.[String(index)]?.plugin === pluginId;
+            const accent = (parent ?? button)?.accent || (pluginId ? PROVIDER_ACCENTS[pluginId] : undefined);
+            const base = pluginId && (session || isQuota || isChild) ? PROVIDER_BACKGROUNDS[pluginId] : undefined;
+            // Quota and other keys always keep the line; Session keys may drop it.
+            const tileStyle = {
+              ...(base ? { background: base } : {}),
+              ...(accent && (!session || sessionLine) ? { boxShadow: `inset 0 3px ${accent}` } : { boxShadow: "none" }),
+            };
             return <button
+              style={tileStyle}
               key={index}
               type="button"
               draggable
@@ -1116,10 +1201,23 @@ function App() {
               onDragOver={(event) => handleDragOver(event, index)}
               onDragLeave={handleDragLeave}
               onDrop={() => handleDrop(index)}
-            ><span className="key-index">{index + 1}</span><strong>{label}</strong><small>{sublabel}</small><em className={session ? "state-chip" : undefined} style={session ? sessionStateChip(session.state) : stateColor ? { color: stateColor } : undefined}>{state}</em><span className="drag-handle" aria-hidden="true">⠿</span></button>;
+            >{session && <span className="state-band" style={{ ...sessionStateChip(session.state, stateColors), top: sessionLine ? 3 : 0 }}>{state}</span>}<span className="key-index">{index + 1}</span><strong style={quota && accent ? { color: accent } : undefined}>{label}</strong><small>{sublabel}</small>{!session && <em style={stateColor ? { color: stateColor } : undefined}>{state}</em>}<span className="drag-handle" aria-hidden="true">⠿</span></button>;
           })}
         </div></div>
-        <div className="deck-legend"><span><i className="legend-dot editing-dot" /> Editing key</span><span><i className="legend-dot pinned-dot" /> Pinned Session</span><span><i className="legend-dot session-dot" /> Live Session display</span><span><i className="legend-dot" /> Other / unassigned</span></div>
+        <div className="state-palette">
+          <div className="state-palette-row">
+            <span className="state-palette-title">Session state colours</span>
+            {SESSION_STATE_ORDER.map((state) => <button key={state} type="button" className={`state-band-sample${editingState === state ? " is-editing" : ""}`} style={sessionStateChip(state, stateColors)} aria-expanded={editingState === state} onClick={() => setEditingState(editingState === state ? null : state)}>{sessionStateWord(state)}</button>)}
+            {Object.keys(stateColors).length > 0 && <button type="button" className="link-button" onClick={resetStateColors}>Reset all to default colours</button>}
+          </div>
+          {editingState ? <ColorPicker label={sessionStateWord(editingState)} value={stateColors[editingState] ?? sessionStateColor(editingState)} isDefault={!stateColors[editingState]} onPick={(color) => setStateColor(editingState, color)} onReset={() => setStateColor(editingState, null)} />
+            : <small className="state-palette-hint">Click a state to change its colour. The preview changes at once; the Deck after Save.</small>}
+          <div className="state-palette-row">
+            <label className="toggle-field compact-toggle"><input type="checkbox" checked={sessionLine} onChange={(event) => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, session_accent_line: event.target.checked } }))} /> Top line on Session keys</label>
+            <small className="state-palette-hint">Quota keys always keep their top line.</small>
+          </div>
+          <div className="deck-legend"><span><i className="legend-dot editing-dot" /> Editing key</span><span><i className="legend-dot pinned-dot" /> Pinned Session</span></div>
+        </div>
       </section>
 
       <aside className="detail-column">
@@ -1168,6 +1266,17 @@ function App() {
               {selectedManifest?.actions.map((action) => <option key={action} value={action}>{displayName(action)}</option>)}
             </select>
           </label>}
+          {(() => {
+            const owner = spanZones.get(editingKey) ?? selectedBinding;
+            if (!owner?.plugin) return null;
+            const fallback = PROVIDER_ACCENTS[owner.plugin] ?? "#8292aa";
+            const setAccent = (color: string | null) => updateConfig((current) => ({ ...current, buttons: current.buttons.map((item) => item.key_index === owner.key_index ? { ...item, accent: color } : item) }));
+            return <div className="accent-field">
+              <span className="field-label">Key colour</span>
+              <ColorPicker label="Key colour" value={owner.accent ?? fallback} isDefault={!owner.accent} onPick={setAccent} onReset={() => setAccent(null)} />
+              <small>The line on top of the key{owner.component === "session" ? ", above the state strip" : " and its title"}.{owner.key_index !== editingKey ? " Shared by every key of this Session zone." : ""}</small>
+            </div>;
+          })()}
           <div className="binding-explainer">
             {selectedBinding?.plugin === "opencode" && selectedBinding.component === "session" ? <>
               <b>Session zone (span {selectedBinding.span})</b><span>This key and {(selectedBinding.span ?? 1) - 1} key{(selectedBinding.span ?? 1) > 2 ? "s" : ""} to its right show live Sessions. Each physical press focuses that slot's Session in OpenChamber.</span>
@@ -1202,7 +1311,7 @@ function App() {
                       <strong>{session.title || "Untitled session"}</strong>
                       <small>{session.project ?? "No project"}</small>
                     </span>
-                    <em className="state-chip" style={sessionStateChip(session.state)}>{session.state}</em>
+                    <em className="state-chip" style={sessionStateChip(session.state, stateColors)}>{sessionStateWord(session.state)}</em>
                   </button>
                 ))}
                 {selectedProviderSessions.length === 0 && <p className="session-list-empty">No live {displayName(selectedBinding.plugin)} sessions available.</p>}

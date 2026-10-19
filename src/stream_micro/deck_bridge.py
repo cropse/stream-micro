@@ -77,6 +77,10 @@ class Mk2BridgeRunner:
                     pinned=self.service.is_key_pinned(binding.key_index),
                     size=output.key_size,
                     provider_id=parent.plugin if parent is not None else binding.plugin,
+                    # A zone's keys share its accent.
+                    accent_color=(parent or binding).accent,
+                    state_colors=self.service.config.stream_deck.state_colors,
+                    accent_line=self.service.config.stream_deck.session_accent_line,
                 )
             output.set_key(binding.key_index, image)
 

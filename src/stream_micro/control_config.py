@@ -7,6 +7,7 @@ the Bridge is being introduced.  The `serve` command will use this contract.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -19,6 +20,11 @@ MK2_KEY_COUNT = 15
 # "account" picks one account of a multi-account source, "label" renames the key.
 QUOTA_DISPLAY_PARAMS = frozenset({"account", "label"})
 SCHEMA_VERSION = 1
+# Colours the dashboard may set: a key's accent, and each Session state's colour.
+SESSION_STATE_NAMES = frozenset(
+    {"idle", "running", "background", "waiting", "completed", "error", "disconnected"}
+)
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 class ControlConfigError(ValueError):
@@ -39,6 +45,10 @@ class Mk2Settings:
     brightness: int = 40
     # Quota keys show what is "remaining" (a full green bar = plenty left) or "used".
     quota_display: str = "remaining"
+    # Session state -> "#rrggbb", replacing the built-in strip colours.
+    state_colors: dict[str, str] = field(default_factory=dict)
+    # Session keys draw the provider colour as a top line (quota keys always do).
+    session_accent_line: bool = True
 
 
 @dataclass(frozen=True)
@@ -51,6 +61,8 @@ class ButtonBinding:
     action: str | None = None
     action_params: dict[str, Any] = field(default_factory=dict)
     window_binding: dict[str, str] | None = None
+    # "#rrggbb" for the key's accent line and title, instead of the provider's.
+    accent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -195,6 +207,16 @@ def validate_control_config(config: ControlConfig) -> None:
         raise ControlConfigError("stream_deck.brightness must be an integer between 0 and 100")
     if config.stream_deck.quota_display not in ("remaining", "used"):
         raise ControlConfigError("stream_deck.quota_display must be remaining or used")
+    if not isinstance(config.stream_deck.session_accent_line, bool):
+        raise ControlConfigError("stream_deck.session_accent_line must be true or false")
+    colors = config.stream_deck.state_colors
+    if not isinstance(colors, dict):
+        raise ControlConfigError("stream_deck.state_colors must be a mapping")
+    for state, color in colors.items():
+        if state not in SESSION_STATE_NAMES:
+            raise ControlConfigError(f"stream_deck.state_colors: unknown state {state}")
+        if not isinstance(color, str) or not _HEX_COLOR.match(color):
+            raise ControlConfigError(f"stream_deck.state_colors.{state} must be #rrggbb")
     serial = config.stream_deck.device_serial
     if serial is not None and (not isinstance(serial, str) or not serial.strip()):
         raise ControlConfigError("stream_deck.device_serial must be a non-empty string or null")
@@ -213,6 +235,10 @@ def validate_control_config(config: ControlConfig) -> None:
         if not isinstance(plugin_config, dict):
             raise ControlConfigError(f"plugins.{plugin_id} must be a mapping")
     for binding in config.buttons:
+        if binding.accent is not None and (
+            not isinstance(binding.accent, str) or not _HEX_COLOR.match(binding.accent)
+        ):
+            raise ControlConfigError(f"buttons[{binding.key_index}].accent must be #rrggbb")
         if not isinstance(binding.span, int) or isinstance(binding.span, bool) or binding.span < 1:
             raise ControlConfigError(
                 f"buttons[{binding.key_index}].span must be a positive integer"
@@ -309,7 +335,9 @@ def parse_control_config(data: dict[str, Any]) -> ControlConfig:
         schema_version=data.get("schema_version", 0),
         bridge=_construct(BridgeSettings, _mapping(data.get("bridge", {}), "bridge"), "bridge"),
         stream_deck=_construct(
-            Mk2Settings, _mapping(data.get("stream_deck", {}), "stream_deck"), "stream_deck"
+            Mk2Settings,
+            _mapping(data.get("stream_deck", {}), "stream_deck"),
+            "stream_deck",
         ),
         plugins=_mapping(data.get("plugins", {}), "plugins"),
         buttons=_migrate_legacy_session_row(_parse_buttons(data.get("buttons", []))),
