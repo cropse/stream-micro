@@ -317,14 +317,16 @@ def test_three_line_titles_never_run_into_the_project_line() -> None:
     assert rows
 
 
-def test_resets_a_week_or_more_away_show_their_date() -> None:
+def test_resets_a_week_or_more_away_show_their_date_and_time() -> None:
     from datetime import datetime, timezone
 
     from stream_micro.control_renderer import _format_reset
 
     now = datetime(2026, 10, 14, 9, 0).astimezone()
-    next_month = datetime(2026, 11, 14, 12, 0).astimezone().astimezone(timezone.utc).isoformat()
-    assert _format_reset(next_month, now=now) == "NOV 14"
+    next_month = datetime(2026, 11, 14, 20, 25).astimezone().astimezone(timezone.utc).isoformat()
+    assert _format_reset(next_month, now=now) == "NOV 14 20:25"
+    refill = datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc).isoformat()  # a date only
+    assert _format_reset(refill, now=now, date_only=True) == "NOV 14"
 
 
 def test_footer_shows_the_reset_of_a_window_that_refills() -> None:
@@ -360,7 +362,7 @@ def test_a_reset_in_the_past_shows_its_date_not_a_weekday() -> None:
 
     now = datetime(2026, 10, 14, 9, 0).astimezone()
     yesterday = datetime(2026, 10, 13, 15, 0).astimezone().astimezone(timezone.utc).isoformat()
-    assert _format_reset(yesterday, now=now) == "OCT 13"
+    assert _format_reset(yesterday, now=now) == "OCT 13 15:00"
 
 
 def test_the_legacy_ollama_alias_follows_the_display_setting() -> None:
@@ -558,3 +560,93 @@ def test_session_keys_may_drop_the_top_line_but_quota_keys_keep_it(line: bool) -
     )
     assert (session.getpixel((36, 0)) == accent) is line
     assert quota.getpixel((36, 0)) == accent
+
+
+def test_the_footer_colour_says_which_limit_is_used_up() -> None:
+    from stream_micro.control_renderer import (
+        FOOTER_COLOR,
+        FOOTER_MONTH_COLOR,
+        FOOTER_WEEK_COLOR,
+        QuotaWindow,
+        _footer_color,
+    )
+
+    reset = "2026-10-19T00:00:00Z"
+    assert _footer_color(QuotaWindow("5H", 40, reset)) == FOOTER_COLOR
+    assert _footer_color(QuotaWindow("5H", 100, reset)) == FOOTER_COLOR  # the usual reset
+    assert _footer_color(QuotaWindow("7D", 60, reset)) == FOOTER_COLOR  # not used up
+    assert _footer_color(QuotaWindow("7D", 100, reset)) == FOOTER_WEEK_COLOR
+    assert _footer_color(QuotaWindow("MO", 100, reset)) == FOOTER_MONTH_COLOR
+    assert _footer_color(QuotaWindow("30D", 100, reset)) == FOOTER_MONTH_COLOR
+    assert _footer_color(QuotaWindow("MO", 100, None)) == FOOTER_COLOR  # no reset to show
+
+
+def test_a_threshold_shows_a_window_reset_early() -> None:
+    from stream_micro.control_renderer import (
+        FOOTER_COLOR,
+        FOOTER_WEEK_COLOR,
+        QuotaWindow,
+        _binding_window,
+        _footer_color,
+    )
+
+    five_hours = QuotaWindow("5H", 40, "2026-10-16T08:00:00Z")  # 60% left
+    week = QuotaWindow("7D", 85, "2026-10-19T00:00:00Z")  # 15% left
+    month = QuotaWindow("MO", 30, "2026-11-16T00:00:00Z")  # 70% left
+    assert _binding_window([five_hours, week, month]) is five_hours
+    assert _binding_window([five_hours, week, month], {"7D": 20}) is week
+    assert _binding_window([five_hours, week, month], {"7D": 10}) is five_hours
+    low_month = QuotaWindow("MO", 90, month.reset_at)  # 10% left
+    assert _binding_window([five_hours, week, low_month], {"7D": 20, "MO": 20}) is low_month
+    assert _footer_color(week) == FOOTER_COLOR
+    assert _footer_color(week, {"7D": 20}) == FOOTER_WEEK_COLOR
+
+
+def test_thresholds_come_from_the_shared_default_then_the_service() -> None:
+    from stream_micro.control_config import (
+        ButtonBinding,
+        ControlConfigError,
+        control_config_data,
+        default_control_config,
+        parse_control_config,
+        reset_thresholds_for,
+    )
+
+    data = control_config_data(default_control_config())
+    data["stream_deck"]["reset_thresholds"] = {
+        "default": {"7D": 20},
+        "http_quota:openrouter": {"MO": 30, "7D": 0},
+    }
+    settings = parse_control_config(data).stream_deck
+    claude = ButtonBinding(key_index=0, plugin="claude_code", component="quota")
+    source = ButtonBinding(
+        key_index=1,
+        plugin="http_quota",
+        component="quota",
+        action_params={"account": "openrouter"},
+    )
+    assert reset_thresholds_for(settings, claude) == {"7D": 20}
+    assert reset_thresholds_for(settings, source) == {"7D": 0, "MO": 30}
+    for bad in ({"default": {"5H": 10}}, {"default": {"7D": 95}}, {"default": {"7D": "20"}}):
+        broken = control_config_data(default_control_config())
+        broken["stream_deck"]["reset_thresholds"] = bad
+        with pytest.raises(ControlConfigError):
+            parse_control_config(broken)
+
+
+def test_a_long_footer_still_fits_the_key() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    signals = {
+        "primary_percent": 100,
+        "primary_label": "MO",
+        "primary_reset_at": (datetime.now(timezone.utc) + timedelta(days=20)).isoformat(),
+    }
+    binding = ButtonBinding(key_index=0, plugin="ollama_quota", component="quota")
+    image = render_quota_key(
+        binding, PluginSnapshot(PluginHealth(True, "ok"), signals=signals), size=(72, 72)
+    )
+    footer = image.crop((0, 62, 72, 72)).convert("L")
+    # Nothing drawn in the outermost pixel columns: the text was shrunk to fit.
+    assert all(footer.getpixel((x, y)) < 120 for x in (0, 71) for y in range(10))
+

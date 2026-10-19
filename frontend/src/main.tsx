@@ -52,7 +52,7 @@ type OpenCodeConfig = { enabled?: boolean; endpoints?: string[]; password_env?: 
 type PluginConfig = { enabled?: boolean; [key: string]: unknown };
 type QuotaDisplay = "remaining" | "used";
 type Config = {
-  stream_deck: { brightness: number; device_serial: string | null; quota_display?: QuotaDisplay; state_colors?: Record<string, string>; session_accent_line?: boolean };
+  stream_deck: { brightness: number; device_serial: string | null; quota_display?: QuotaDisplay; state_colors?: Record<string, string>; session_accent_line?: boolean; reset_thresholds?: Record<string, ResetThresholds> };
   plugins: Record<string, PluginConfig>;
   buttons: Button[];
 };
@@ -804,6 +804,60 @@ type ServiceItem = {
 };
 type ServiceChoice = { id: string; group: ServiceGroup; name: string; needs: string; billing?: Billing; connected: boolean; pick: () => string };
 
+// -- Show a reset early ------------------------------------------------------------
+type ResetThresholds = { "7D"?: number; MO?: number };
+// Usage-API presets that only report a balance: no reset to show early.
+const BALANCE_PRESETS = new Set(["deepseek", "moonshot", "moonshot_cn", "siliconflow", "siliconflow_intl", "novita", "openrouter_credits"]);
+const QUOTA_SERVICES = new Set(["claude_code", "codex", "ollama_quota"]);
+
+// `service` is "default" (every key) or a service ("claude_code", "http_quota:<source id>").
+function ResetEarly({ config, updateConfig, service }: {
+  config: Config | null;
+  updateConfig: (change: (current: Config) => Config) => void;
+  service: string;
+}) {
+  const all = config?.stream_deck.reset_thresholds ?? {};
+  const shared = all.default ?? {};
+  const own = all[service] ?? {};
+  const isDefault = service === "default";
+  const set = (window: keyof ResetThresholds, value: number | null) => updateConfig((current) => {
+    const thresholds = { ...(current.stream_deck.reset_thresholds ?? {}) };
+    const entry: ResetThresholds = { ...(thresholds[service] ?? {}) };
+    if (value === null) delete entry[window];
+    else entry[window] = value;
+    if (Object.keys(entry).length) thresholds[service] = entry;
+    else delete thresholds[service];
+    return { ...current, stream_deck: { ...current.stream_deck, reset_thresholds: thresholds } };
+  });
+  const label = (value: number | undefined) => value ? `${value}%` : t("Off");
+  return <div className="reset-early">
+    <b>{t("Show the reset early")}</b>
+    <small>{isDefault
+      ? t("When a weekly or monthly limit has this much or less left, a key's bottom line shows when that limit resets: amber for weekly, red for monthly. The 5-hour limit always switches at 0%.")
+      : t("For this service only. Shared follows the setting at the top of Configuration.")}</small>
+    {(["7D", "MO"] as const).map((window) => <div key={window} className="reset-early-row">
+      <span>{window === "7D" ? t("Weekly (7D) at or below") : t("Monthly (MO) at or below")}</span>
+      <div className="segmented" role="group">
+        {!isDefault && <button type="button" className={own[window] === undefined ? "is-on" : ""} onClick={() => set(window, null)}>{t("Shared ({value})", { value: label(shared[window]) })}</button>}
+        {(() => {
+          const inherited = !isDefault && own[window] === undefined;
+          const value = isDefault ? shared[window] ?? 0 : own[window] ?? shared[window] ?? 0;
+          // The shared value is stored only when it is not 0 (0 = off = the built-in rule).
+          const store = (next: number) => {
+            const clean = Math.max(0, Math.min(90, Math.round(Number.isFinite(next) ? next : 0)));
+            set(window, isDefault && clean === 0 ? null : clean);
+          };
+          return <span className={`threshold-stepper${inherited ? " is-inherited" : ""}`}>
+            <input type="text" inputMode="numeric" maxLength={2} value={value} aria-label={window} onChange={(event) => store(Number(event.target.value.replace(/\D/g, "") || 0))} onFocus={(event) => event.target.select()} />
+            <span>%</span>
+            <em>{value === 0 ? t("Off") : ""}</em>
+          </span>;
+        })()}
+      </div>
+    </div>)}
+  </div>;
+}
+
 const PLUGIN_SERVICES: { id: string; group: ServiceGroup; name: string; billing?: Billing; needs: string }[] = [
   { id: "claude_code", group: "agent", name: "Claude Code", needs: "Nothing: reads Claude Code on this computer." },
   { id: "codex", group: "agent", name: "Codex", needs: "Nothing: uses the codex installed on this computer." },
@@ -1138,7 +1192,7 @@ function App() {
       leaving: !on,
       fresh: pending,
       boundKeys: keysUsing(spec.id),
-      detail,
+      detail: <>{detail}{QUOTA_SERVICES.has(spec.id) && <ResetEarly config={config} updateConfig={updateConfig} service={spec.id} />}</>,
       turnOff: () => turnOff(spec.id),
       undo: () => turnOn(spec.id),
       removeLabel: t("Turn off"),
@@ -1175,7 +1229,7 @@ function App() {
       leaving: !current,
       fresh: pending,
       boundKeys: keysUsing("http_quota", sourceId),
-      detail: <UsageSourceCards config={config} snapshot={snapshots.http_quota} updateConfig={updateConfig} only={sourceId} savedIds={new Set(sourcesIn(savedConfig).map((item) => item.id))} />,
+      detail: <><UsageSourceCards config={config} snapshot={snapshots.http_quota} updateConfig={updateConfig} only={sourceId} savedIds={new Set(sourcesIn(savedConfig).map((item) => item.id))} />{!BALANCE_PRESETS.has(source.preset || "custom") && <ResetEarly config={config} updateConfig={updateConfig} service={`http_quota:${sourceId}`} />}</>,
       turnOff: () => { setSourcesTo(currentSources.filter((item) => item !== current)); setOpenServices(new Set()); },
       undo: saved ? () => updateConfig((cfg) => ({ ...cfg, plugins: { ...cfg.plugins, http_quota: { ...cfg.plugins.http_quota, enabled: true, sources: [...sourcesIn(cfg), saved] } } })) : undefined,
       removeLabel: t("Remove"),
@@ -1736,6 +1790,7 @@ function App() {
             <option value="used">{t("What is used")}</option>
           </select>
         </label>
+        <ResetEarly config={config} updateConfig={updateConfig} service="default" />
       </section>
       <section className="panel services-panel" aria-labelledby="services-title">
         <div className="services-head">

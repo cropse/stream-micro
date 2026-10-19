@@ -406,22 +406,66 @@ def _quota_color(remaining: float) -> str:
     return "#22c55e"
 
 
-def _binding_window(windows: list[QuotaWindow]) -> QuotaWindow:
+def _used_up(window: QuotaWindow, thresholds: Mapping[str, float] | None = None) -> bool:
+    """At 0% left, or at the window's threshold (``{"7D": 20}``: 20% or less)."""
+
+    limit = max(0.0, float((thresholds or {}).get(window.label, 0)))
+    return round(window.remaining) <= limit
+
+
+def _binding_window(
+    windows: list[QuotaWindow], thresholds: Mapping[str, float] | None = None
+) -> QuotaWindow:
     """The window whose reset the footer shows.
 
     Normally the first window (the shortest: 5H before 7D before MO). Once a
     window is used up, that one, since nothing works until it refills; of
     several used up, the one that refills last (MO, then 7D, then 5H). A
-    window without a reset time (a credit balance) would only show ``RESET --``.
+    window counts as used up at its threshold (``thresholds["7D"] = 20``: 20%
+    or less left); without one, at 0%. A window without a reset time (a credit
+    balance) would only show ``RESET --``.
     """
 
     timed = [window for window in windows if window.reset_at]
     if not timed:
         return windows[0]
-    spent = [window for window in timed if round(window.remaining) <= 0]
+    spent = [window for window in timed if _used_up(window, thresholds)]
     if spent:
         return max(spent, key=lambda window: _reset_order(window.reset_at))
     return timed[0]
+
+
+# The footer's colour: near-white for the usual reset; amber once it shows a
+# weekly limit that is used up (or at its threshold), red for a monthly one,
+# so a glance tells why the key is not showing the 5-hour reset.
+FOOTER_COLOR = "#dce6f6"
+FOOTER_WEEK_COLOR = "#fbbf24"
+FOOTER_MONTH_COLOR = "#f87171"
+
+
+def _window_period(label: str) -> str:
+    """``hours``, ``week`` or ``month``, from labels such as 5H, 7D, 30D, MO."""
+
+    text = label.strip().upper()
+    if text.startswith("MO"):
+        return "month"
+    if text.startswith("W") or text.endswith("W"):
+        return "week"
+    if text.endswith("D"):
+        try:
+            days = float(text[:-1])
+        except ValueError:
+            return "week"
+        return "month" if days >= 28 else "week"
+    return "hours"
+
+
+def _footer_color(window: QuotaWindow, thresholds: Mapping[str, float] | None = None) -> str:
+    if not window.reset_at or not _used_up(window, thresholds):
+        return FOOTER_COLOR
+    return {"week": FOOTER_WEEK_COLOR, "month": FOOTER_MONTH_COLOR}.get(
+        _window_period(window.label), FOOTER_COLOR
+    )
 
 
 def _reset_order(value: str | None) -> float:
@@ -432,10 +476,12 @@ def _reset_order(value: str | None) -> float:
 def _format_reset(
     value: str | None, *, now: datetime | None = None, date_only: bool = False
 ) -> str:
-    """When the window refills: ``TODAY 15:11``, ``THU 20:25`` this week, ``NOV 14`` later.
+    """When the window refills, with its time whenever the time is known.
 
-    A reset known only as a date shows no time (``TODAY``, ``THU``): the
-    stored time of day is a placeholder, not when it happens.
+    ``TODAY 15:11``, ``THU 20:25`` within the week, ``NOV 14 20:25`` further
+    away or already past. A reset known only as a date shows no time
+    (``TODAY``, ``THU``, ``NOV 14``): the stored time of day is a placeholder,
+    not when it happens.
     """
 
     parsed = parse_timestamp(value)
@@ -448,7 +494,7 @@ def _format_reset(
         return "TODAY" if date_only else shown.strftime("TODAY %H:%M")
     days = (shown.date() - today).days
     if days < 0 or days >= 6:  # a weekday name would be ambiguous (or look ahead)
-        return shown.strftime("%b %d").upper()
+        return shown.strftime("%b %d" if date_only else "%b %d %H:%M").upper()
     return shown.strftime("%a" if date_only else "%a %H:%M").upper()
 
 
@@ -528,6 +574,7 @@ def render_quota_key(
     *,
     size: tuple[int, int],
     display: str = "remaining",
+    thresholds: Mapping[str, float] | None = None,
 ) -> Image.Image:
     """Draw up to two quota windows: big number, bar, and when it resets.
 
@@ -646,7 +693,7 @@ def render_quota_key(
         if fill_right > 4:
             draw.rectangle((4, bar_top, fill_right, bar_bottom), fill=color)
 
-    binding_window = _binding_window(windows)
+    binding_window = _binding_window(windows, thresholds)
     footer = (
         "BALANCE"
         if binding_window.amount_text and not binding_window.reset_at
@@ -656,8 +703,9 @@ def render_quota_key(
         (width // 2, height - round(6 * scale)),
         footer,
         anchor="mm",
-        fill="#dce6f6",
-        font=_font(round(10 * scale), bold=True),
+        fill=_footer_color(binding_window, thresholds),
+        # A date with its time (NOV 14 20:25) is longer: shrink it to fit.
+        font=_fit_font(draw, footer, round(10 * scale), round(7 * scale), width - 4),
     )
     return image
 

@@ -392,3 +392,15 @@ button.small { padding: 5px 10px; font-size: 12px; min-height: 0; }
 .style-choice.is-on { background: #1f6f54; border-color: #4de57a; color: #ffffff; }
 .compact-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: #c9d4e3; }
 .lang-switch { min-width: 56px; }
+.reset-early { display: grid; gap: 6px; margin-top: 10px; padding: 10px 12px; border: 1px solid #263044; border-radius: 10px; }
+.hardware-bar .reset-early { grid-column: 1 / -1; }
+.reset-early small { color: #8292aa; font-size: 12px; }
+.reset-early-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; }
+.reset-early-row > span { font-size: 13px; color: #dce6f6; }
+.segmented { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.segmented button { padding: 4px 10px; border-radius: 999px; border: 1px solid #2a3a53; background: #0f1a2b; color: #c9d4e3; font-size: 12px; cursor: pointer; }
+.segmented button.is-on { background: #fbbf24; border-color: #fbbf24; color: #1a1300; font-weight: 700; }
+.threshold-stepper { display: inline-flex; align-items: center; gap: 4px; }
+.threshold-stepper input { width: 44px; padding: 4px 6px; text-align: right; border-radius: 8px; border: 1px solid #2a3a53; background: #0b1220; color: #fbbf24; font-weight: 700; }
+.threshold-stepper.is-inherited input { color: #8292aa; }
+.threshold-stepper em { min-width: 3em; color: #8292aa; font-size: 12px; font-style: normal; }

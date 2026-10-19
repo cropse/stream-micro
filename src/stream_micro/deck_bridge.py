@@ -8,7 +8,7 @@ from collections.abc import Callable
 from threading import Event
 
 from .bridge import BridgeError, BridgeService
-from .control_config import ButtonBinding
+from .control_config import ButtonBinding, reset_thresholds_for
 from .control_renderer import render_control_key, render_quota_key
 from .device import DeviceError, Mk2DeckOutput
 from .plugins.base import AgentSession
@@ -64,6 +64,7 @@ class Mk2BridgeRunner:
                     snapshots.get(binding.plugin or ""),
                     size=output.key_size,
                     display=self.service.config.stream_deck.quota_display,
+                    thresholds=reset_thresholds_for(self.service.config.stream_deck, binding),
                 )
             else:
                 image = render_control_key(

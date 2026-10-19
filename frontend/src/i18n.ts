@@ -40,6 +40,13 @@ export const isZh = () => current === "zh-TW";
 export const locale = () => (current === "zh-TW" ? "zh-TW" : "en-US");
 
 const ZH: Record<string, string> = {
+  "Show the reset early": "提早顯示重置時間",
+  "When a weekly or monthly limit has this much or less left, a key's bottom line shows when that limit resets: amber for weekly, red for monthly. The 5-hour limit always switches at 0%.": "每週或每月額度剩到這個比例（或更少）時，按鍵最下面那行改顯示它的重置時間：週額度是橘色，月額度是紅色。5 小時額度固定在 0% 才切換。",
+  "For this service only. Shared follows the setting at the top of Configuration.": "只套用到這個服務。「共用」會跟著設定頁最上面的值。",
+  "Weekly (7D) at or below": "每週（7D）剩不到",
+  "Monthly (MO) at or below": "每月（MO）剩不到",
+  "Shared ({value})": "共用（{value}）",
+  Off: "關閉",
   "Open that source under Configuration and fill in where its number is.": "到設定頁打開那個來源，填上數字在回應裡的位置。",
   "Open that source under Configuration and add a row with where its number is.": "到設定頁打開那個來源，加一列並填上數字的位置。",
   "Fill in where at least one number is in the reply (a row below); the Bridge cannot save this source without it.": "至少要在下面填一列「數字在回應裡的位置」，不然 Bridge 無法儲存這個來源。",

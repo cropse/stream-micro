@@ -38,6 +38,22 @@ class BridgeSettings:
     refresh_interval_seconds: float = 5.0
 
 
+RESET_THRESHOLD_WINDOWS = ("7D", "MO")
+
+
+def reset_thresholds_for(settings: Mk2Settings, binding: ButtonBinding) -> dict[str, int]:
+    """The thresholds a quota key uses: the shared default, then its service's own."""
+
+    service = binding.plugin or ""
+    account = binding.action_params.get("account") if binding.action_params else None
+    if service == "http_quota" and isinstance(account, str) and account:
+        service = f"http_quota:{account}"
+    return {
+        **settings.reset_thresholds.get("default", {}),
+        **settings.reset_thresholds.get(service, {}),
+    }
+
+
 @dataclass(frozen=True)
 class Mk2Settings:
     model: str = "mk2"
@@ -49,6 +65,10 @@ class Mk2Settings:
     state_colors: dict[str, str] = field(default_factory=dict)
     # Session keys draw the provider colour as a top line (quota keys always do).
     session_accent_line: bool = True
+    # When a 7D or MO window has at most this % left, the footer shows its reset
+    # as if it were used up. "default" applies to every key; a service key
+    # ("claude_code", "http_quota:<source id>", ...) overrides it. 5H stays at 0.
+    reset_thresholds: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -209,6 +229,22 @@ def validate_control_config(config: ControlConfig) -> None:
         raise ControlConfigError("stream_deck.quota_display must be remaining or used")
     if not isinstance(config.stream_deck.session_accent_line, bool):
         raise ControlConfigError("stream_deck.session_accent_line must be true or false")
+    thresholds = config.stream_deck.reset_thresholds
+    if not isinstance(thresholds, dict):
+        raise ControlConfigError("stream_deck.reset_thresholds must be a mapping")
+    for service, windows in thresholds.items():
+        if not isinstance(service, str) or not service or not isinstance(windows, dict):
+            raise ControlConfigError("stream_deck.reset_thresholds maps a service to its windows")
+        for window, percent in windows.items():
+            if window not in RESET_THRESHOLD_WINDOWS:
+                raise ControlConfigError(
+                    f"stream_deck.reset_thresholds.{service}: windows are "
+                    f"{', '.join(RESET_THRESHOLD_WINDOWS)}"
+                )
+            if isinstance(percent, bool) or not isinstance(percent, int) or not 0 <= percent <= 90:
+                raise ControlConfigError(
+                    f"stream_deck.reset_thresholds.{service}.{window} must be 0-90"
+                )
     colors = config.stream_deck.state_colors
     if not isinstance(colors, dict):
         raise ControlConfigError("stream_deck.state_colors must be a mapping")
