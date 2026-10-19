@@ -8,6 +8,8 @@ from typing import Any, Protocol
 class SessionState(str, Enum):
     IDLE = "idle"
     RUNNING = "running"
+    # The turn has ended but background subagents or agents still work for it.
+    BACKGROUND = "background"
     WAITING = "waiting"
     COMPLETED = "completed"
     ERROR = "error"

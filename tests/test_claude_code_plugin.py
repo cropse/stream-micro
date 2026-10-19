@@ -255,3 +255,294 @@ def test_bridge_registers_claude_code_only_when_enabled(tmp_path: Path) -> None:
         assert isinstance(service.plugins["claude_code"], ClaudeCodePlugin)
     finally:
         service.close()
+
+
+def _register(home: Path, pid: int, session_id: str, **fields) -> None:
+    folder = home / "sessions"
+    folder.mkdir(parents=True, exist_ok=True)
+    record = {
+        "pid": pid,
+        "sessionId": session_id,
+        "startedAt": 1_000_000,
+        "procStart": "1",
+        **fields,
+    }
+    (folder / f"{pid}.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def _history_ids(home: Path, *session_ids: str) -> None:
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "history.jsonl").write_text(
+        "".join(
+            json.dumps({"sessionId": sid, "display": sid, "timestamp": 1000 + index}) + "\n"
+            for index, sid in enumerate(session_ids)
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_live_process_status_decides_state_and_dead_sessions_show_off(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _history_ids(home, "busy1", "idle1", "dead1", "stale1")
+    _register(home, 11, "busy1", status="busy")
+    _register(home, 12, "idle1", status="idle")
+    # pid 13 was reused by another program: its start time no longer matches.
+    _register(home, 13, "stale1", status="busy", procStart="9")
+    _register(home, 14, "extra1", status="idle", name="Only in registry", cwd="F:/x")
+    plugin = ClaudeCodePlugin(
+        {"enabled": True, "claude_home": str(home)},
+        process_probe={11: 1, 12: 1, 13: 5, 14: 1}.get,
+    )
+
+    snapshot = plugin.snapshot()
+    states = {item.id: item.state for item in snapshot.sessions}
+    assert states == {
+        "busy1": SessionState.RUNNING,
+        "idle1": SessionState.IDLE,
+        "extra1": SessionState.IDLE,
+        "dead1": SessionState.DISCONNECTED,
+        "stale1": SessionState.DISCONNECTED,
+    }
+    order = [item.id for item in snapshot.sessions]
+    assert order.index("dead1") > order.index("extra1")  # open Sessions come first
+    assert "3 open" in snapshot.health.detail
+
+
+def test_unknown_process_table_does_not_turn_every_session_off(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _history_ids(home, "a1")
+    _register(home, 11, "a1", status="busy")
+    plugin = ClaudeCodePlugin(
+        {"enabled": True, "claude_home": str(home)}, process_probe=None
+    )
+
+    assert plugin.snapshot().sessions[0].state == SessionState.IDLE
+
+
+def test_fresh_wait_hook_beats_a_coarse_busy_status(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _history_ids(home, "a1")
+    _register(home, 11, "a1", status="busy", statusUpdatedAt=1_000_000)
+    plugin = ClaudeCodePlugin(
+        {"enabled": True, "claude_home": str(home)},
+        process_probe={11: 1}.get,
+        clock=lambda: 2_000.0,  # hook arrives after the registry status update
+    )
+    plugin.handle_hook({"session_id": "a1", "hook_event_name": "PermissionRequest"})
+
+    assert plugin.snapshot().sessions[0].state == SessionState.WAITING
+
+
+def test_an_older_registry_status_never_hides_a_wait_hook(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _history_ids(home, "a1")
+    _register(home, 11, "a1", status="busy", statusUpdatedAt=999_000)
+    plugin = ClaudeCodePlugin(
+        {"enabled": True, "claude_home": str(home)},
+        process_probe={11: 1}.get,
+        clock=lambda: 1_000.0,  # the hook arrives one second after "busy"
+    )
+    plugin.handle_hook({"session_id": "a1", "hook_event_name": "PermissionRequest"})
+    assert plugin.snapshot().sessions[0].state == SessionState.WAITING
+
+    # A newer busy report means the approval was given.
+    _register(home, 11, "a1", status="busy", statusUpdatedAt=1_001_000)
+    assert plugin.snapshot().sessions[0].state == SessionState.RUNNING
+
+
+def test_finished_turn_with_working_subagent_shows_background(tmp_path: Path) -> None:
+    import os
+    import time as time_module
+    from datetime import datetime, timezone
+
+    home = tmp_path / "home"
+    _history_ids(home, "abc")
+    project = home / "projects" / "F--work"
+    project.mkdir(parents=True)
+    now = time_module.time()
+    stamp = datetime.fromtimestamp(now - 5, tz=timezone.utc).isoformat()
+    (project / "abc.jsonl").write_text(
+        json.dumps(
+            {"type": "assistant", "timestamp": stamp,
+             "message": {"stop_reason": "end_turn", "content": []}}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    agents = project / "abc" / "subagents"
+    agents.mkdir(parents=True)
+    (agents / "agent-worker.jsonl").write_text("{}\n", encoding="utf-8")
+    (agents / "agent-worker.meta.json").write_text(
+        json.dumps({"requestShape": "background"}), encoding="utf-8"
+    )
+    os.utime(agents / "agent-worker.jsonl", (now - 10, now - 10))
+    plugin = ClaudeCodePlugin({"enabled": True, "claude_home": str(home)}, clock=lambda: now)
+
+    assert plugin.snapshot().sessions[0].state == SessionState.BACKGROUND
+
+
+def test_sessions_hosted_by_the_claude_desktop_app_are_left_out(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _history_ids(home, "cli-a", "desk-a")
+    _register(home, 11, "cli-a", status="idle", entrypoint="cli")
+    _register(home, 12, "desk-a", status="busy", entrypoint="claude-desktop")
+    _register(home, 13, "desk-b", status="idle", hostSessionId="local_b", name="Desktop tab")
+    project = home / "projects" / "app"
+    project.mkdir(parents=True)
+    (project / "desk-a.jsonl").write_text(
+        json.dumps({"type": "user", "entrypoint": "claude-desktop"}) + "\n", encoding="utf-8"
+    )
+    alive = {11: 1, 12: 1, 13: 1}
+    plugin = ClaudeCodePlugin(
+        {"enabled": True, "claude_home": str(home)}, process_probe=lambda pid: alive.get(pid)
+    )
+
+    assert [item.id for item in plugin.snapshot().sessions] == ["cli-a"]
+    # Still left out once the desktop app has closed it, also after a restart.
+    alive.pop(12)
+    assert [item.id for item in plugin.snapshot().sessions] == ["cli-a"]
+    restarted = ClaudeCodePlugin(
+        {"enabled": True, "claude_home": str(home)}, process_probe=lambda pid: alive.get(pid)
+    )
+    assert [item.id for item in restarted.snapshot().sessions] == ["cli-a"]
+
+
+def test_old_done_hook_expires_and_newer_idle_ends_an_old_wait(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _history_ids(home, "a1", "b1")
+    _register(home, 11, "a1", status="idle", statusUpdatedAt=1_000_000)
+    _register(home, 12, "b1", status="idle", statusUpdatedAt=2_000_000)
+    now = [1_100.0]
+    plugin = ClaudeCodePlugin(
+        {"enabled": True, "claude_home": str(home)},
+        process_probe={11: 1, 12: 1}.get,
+        clock=lambda: now[0],
+    )
+    plugin.handle_hook({"session_id": "a1", "hook_event_name": "Stop"})
+    plugin.handle_hook({"session_id": "b1", "hook_event_name": "PermissionRequest"})
+    states = {item.id: item.state for item in plugin.snapshot().sessions}
+    assert states["a1"] == SessionState.COMPLETED
+
+    now[0] = 1_100.0 + 3600  # an hour later; b1's registry went idle after the prompt
+    states = {item.id: item.state for item in plugin.snapshot().sessions}
+    assert states["a1"] == SessionState.IDLE  # DONE is shown for a limited time
+    assert states["b1"] == SessionState.IDLE
+
+
+def test_an_old_stop_never_ends_a_newer_turn(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _history_ids(home, "a1")
+    project = home / "projects" / "app"
+    project.mkdir(parents=True)
+    prompt = {"type": "user", "timestamp": "2026-10-14T00:00:01Z", "message": {"content": "next"}}
+    (project / "a1.jsonl").write_text(json.dumps(prompt) + "\n", encoding="utf-8")
+    from datetime import datetime, timezone
+
+    stop_at = datetime(2026, 10, 14, 0, 0, 0, tzinfo=timezone.utc).timestamp()
+    now = [stop_at]
+    plugin = ClaudeCodePlugin(
+        {"enabled": True, "claude_home": str(home)}, process_probe=None, clock=lambda: now[0]
+    )
+    plugin.handle_hook({"session_id": "a1", "hook_event_name": "Stop"})  # one second earlier
+    now[0] = stop_at + 5
+    assert plugin.snapshot().sessions[0].state == SessionState.RUNNING
+
+
+def test_a_session_alive_moments_ago_is_not_off_after_one_missed_read(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _history_ids(home, "a1")
+    _register(home, 11, "a1", status="busy", statusUpdatedAt=1_000_000)
+    alive = {11: 1}
+    now = [1_000.0]
+    plugin = ClaudeCodePlugin(
+        {"enabled": True, "claude_home": str(home)},
+        process_probe=lambda pid: alive.get(pid),
+        clock=lambda: now[0],
+    )
+    assert plugin.snapshot().sessions[0].state == SessionState.RUNNING
+
+    (home / "sessions" / "11.json").write_text("{", encoding="utf-8")  # being rewritten
+    now[0] += 5
+    assert plugin.snapshot().sessions[0].state != SessionState.DISCONNECTED
+
+    now[0] += 60  # still missing: the process is gone
+    assert plugin.snapshot().sessions[0].state == SessionState.DISCONNECTED
+
+
+def test_snapshots_run_one_at_a_time(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    home = tmp_path / "home"
+    _history_ids(home, "a1")
+    plugin = ClaudeCodePlugin({"enabled": True, "claude_home": str(home)}, process_probe=None)
+    original, active, peak = plugin._snapshot, [0], [0]
+
+    def slow():
+        active[0] += 1
+        peak[0] = max(peak[0], active[0])
+        time.sleep(0.05)
+        try:
+            return original()
+        finally:
+            active[0] -= 1
+
+    plugin._snapshot = slow  # type: ignore[method-assign]
+    threads = [threading.Thread(target=plugin.snapshot) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert peak[0] == 1
+
+
+def test_a_wait_hook_a_moment_before_its_record_still_shows_wait(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
+    home = tmp_path / "home"
+    _history_ids(home, "a1")
+    project = home / "projects" / "app"
+    project.mkdir(parents=True)
+    asked = datetime(2026, 10, 14, 0, 0, 0, 500000, tzinfo=timezone.utc)
+    record = {
+        "type": "assistant",
+        "timestamp": asked.isoformat().replace("+00:00", "Z"),
+        "message": {"stop_reason": "tool_use", "content": []},
+    }
+    (project / "a1.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+    now = [asked.timestamp() - 0.3]  # the hook lands 0.3 s before the record's time
+    plugin = ClaudeCodePlugin(
+        {"enabled": True, "claude_home": str(home)}, process_probe=None, clock=lambda: now[0]
+    )
+    plugin.handle_hook({"session_id": "a1", "hook_event_name": "PermissionRequest"})
+    now[0] = asked.timestamp() + 2
+    assert plugin.snapshot().sessions[0].state == SessionState.WAITING
+
+
+def test_a_transcript_without_a_front_end_is_scanned_once_per_version(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import stream_micro.plugins.claude_code as code_module
+
+    home = tmp_path / "home"
+    _history_ids(home, "a1")
+    project = home / "projects" / "app"
+    project.mkdir(parents=True)
+    transcript = project / "a1.jsonl"
+    transcript.write_text(json.dumps({"type": "summary"}) + "\n", encoding="utf-8")
+    scans = []
+    real = code_module.transcript_entrypoint
+
+    def counting(path):
+        scans.append(path)
+        return real(path)
+
+    monkeypatch.setattr(code_module, "transcript_entrypoint", counting)
+    plugin = ClaudeCodePlugin({"enabled": True, "claude_home": str(home)}, process_probe=None)
+    plugin.snapshot()
+    plugin.snapshot()
+    assert len(scans) == 1
+    with transcript.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"type": "user", "entrypoint": "cli"}) + "\n")
+    plugin.snapshot()
+    assert len(scans) == 2

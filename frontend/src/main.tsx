@@ -65,6 +65,7 @@ function displayName(value: string | null | undefined) {
 const SESSION_STATE_COLORS: Record<string, string> = {
   idle: "#166534",
   running: "#4a9eff",
+  background: "#b794ff",
   waiting: "#ffc15a",
   completed: "#ffffff",
   error: "#ff7983",
@@ -271,7 +272,7 @@ function ClaudeCodeCard({ config, snapshot, updateConfig }: {
     {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
     <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>recent Claude Code Sessions available to button zones</span></div>
     {snapshot?.signals && <UsageBars signals={snapshot.signals} generic display={config?.stream_deck.quota_display ?? "remaining"} />}
-    <p className="provider-note">The companion hook adds live Session status. Quota appears after Claude Code's status line receives its first API response.</p>
+    <p className="provider-note">Session state comes from the running Claude process and its transcript, so it works without setup; the companion hook adds an exact WAIT when Claude needs your approval. SUB means the turn ended but subagents or other agents still work for it. Quota appears after Claude Code's status line receives its first API response.</p>
   </section>;
 }
 
@@ -779,7 +780,7 @@ function App() {
               <b>Codex chat zone (span {selectedBinding.span})</b><span>This zone follows Codex's most recently active local chats, using live turn status and Codex-specific key styling.</span>
               <small>{selectedBinding.action === "select_session" ? "Physical press: open this exact chat in the ChatGPT desktop app." : "Physical press: no Codex chat action configured."}</small>
             </> : selectedBinding?.plugin === "claude_code" && selectedBinding.component === "session" ? <>
-              <b>Claude Code Session zone (span {selectedBinding.span})</b><span>This zone follows recent local Claude Code Sessions and uses lifecycle hooks for live status.</span>
+              <b>Claude Code Session zone (span {selectedBinding.span})</b><span>This zone follows open and recent Claude Code Sessions; open ones come first.</span>
               <small>{selectedBinding.action === "select_session" ? "Physical press: resume this exact Session in a new console." : "Physical press: no Claude Code Session action configured."}</small>
             </> : selectedBinding?.plugin ? <><b>{displayName(selectedBinding.component)}</b><span>This key renders the selected Plugin component when that Plugin supplies it.</span><small>Physical action: {displayName(selectedBinding.action)}</small></> : <><b>Unassigned key</b><span>Choose a Plugin and Component to define what this key displays.</span><small>No physical action is configured.</small></>}
           </div>

@@ -46,11 +46,11 @@ so both surfaces use the same OpenCode Server.
 - When OpenChamber Desktop is running, Bridge auto-discovers its local control
   server and reads Sessions through its authenticated `/api` proxy. This keeps
   the Deck list and the OpenChamber UI on the same OpenCode Server.
-- Under the provider's line, the strip of a Session key shows its state. Bright
-  strips need a look:
-  `RUN` (working), `WAIT` (needs your input or approval), `DONE` (finished
-  recently), `ERR` (failed). Dark green strips are quiet: `IDLE` (open, no
-  active turn) and `OFF` (no live process).
+- Under the provider's line, the strip of a Session key shows its state.
+  Bright strips need a look: `RUN` (working), `SUB` (background agents still
+  working), `WAIT` (needs your input or approval), `DONE` (finished recently),
+  `ERR` (failed). Dark green strips are quiet: `IDLE` (open, no active turn)
+  and `OFF` (no live process).
 
 ## Quota keys
 
@@ -79,8 +79,21 @@ Session keys. `ollama_quota` is a separate display-only plugin; enable it in
 
 Enable `plugins.claude_code` in the Dashboard or `bridge.yaml`. The provider
 reads recent Session IDs and titles from the local Claude Code history without
-copying credentials. The bundled companion hook supplies live `RUNNING`,
-`WAITING`, `COMPLETED`, and `ERROR` state:
+copying credentials.
+
+Session state works without any setup: the Bridge reads the live Claude process
+registry (`~/.claude/sessions`, busy/idle, matched by process start time; a
+Session whose process is gone shows `OFF`) and the tail of each Session
+transcript. A finished turn whose background subagents, or background
+`codex`/`opencode`/`agy` (Antigravity CLI)/`gemini` commands, have not reported
+back shows `SUB`. Open Sessions are listed before closed ones. Checking whether
+a process still runs is implemented for Windows; elsewhere states come from
+transcripts and hooks, and closed Sessions are not marked `OFF`.
+Sessions hosted by the Claude desktop app are left out: they are not terminal
+Sessions, and resuming one in a console would fork it.
+
+The bundled companion hook adds exact lifecycle events, notably `WAIT` when
+Claude asks for approval:
 
 ```powershell
 claude --plugin-dir integrations/claude-code-stream-micro

@@ -17,6 +17,7 @@ from .timeparse import parse_timestamp
 _STATUS_COLORS = {
     SessionState.IDLE: "#166534",
     SessionState.RUNNING: "#4a9eff",
+    SessionState.BACKGROUND: "#b794ff",
     SessionState.WAITING: "#ffc15a",
     SessionState.COMPLETED: "#ffffff",
     SessionState.ERROR: "#ff7983",
@@ -28,6 +29,7 @@ _DARK_STATUS = frozenset({SessionState.IDLE, SessionState.DISCONNECTED})
 _SHORT_STATE = {
     SessionState.IDLE: "IDLE",
     SessionState.RUNNING: "RUN",
+    SessionState.BACKGROUND: "SUB",
     SessionState.WAITING: "WAIT",
     SessionState.COMPLETED: "DONE",
     SessionState.ERROR: "ERR",
