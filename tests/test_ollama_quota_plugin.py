@@ -139,6 +139,9 @@ def test_stale_data_is_kept_when_refresh_fails() -> None:
     assert snapshot.health.detail == "Connected (stale)"
     assert snapshot.signals is not None
     assert snapshot.signals["session_percent"] == 10.0
+    # Keys draw last-seen numbers grey.
+    assert snapshot.signals["stale"] is True
+    assert isinstance(snapshot.signals["seen_at"], str)
 
 
 def test_error_snapshot_is_cached_until_next_refresh() -> None:
@@ -190,4 +193,20 @@ def test_monthly_credits_become_a_generic_quota_row() -> None:
         "primary_percent": 11.0,
         "primary_label": "MONTH",
         "primary_reset_at": "2026-11-14T00:00:00+00:00",
+        "primary_reset_precision": "date",
     }
+
+
+def test_last_seen_numbers_give_way_to_the_error_after_the_grace_period() -> None:
+    failures = [ScrapeError("cookie expired") for _ in range(20)]
+    source = FakeQuotaSource(results=[_snapshot(10.0), *failures])
+    clock = FakeClock()
+    plugin = _plugin(source, clock)
+    assert plugin.snapshot().health.connected
+
+    seen = []
+    for _ in range(12):  # a failed read every interval, for two minutes past the grace
+        clock.now += 35.0
+        seen.append(plugin.snapshot().health.detail)
+    assert seen[0] == "Connected (stale)"
+    assert seen[-1] == "cookie expired"

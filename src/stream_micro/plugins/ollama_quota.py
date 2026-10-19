@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 from ..config import OllamaConfig
@@ -57,6 +58,10 @@ class OllamaQuotaPlugin:
         self._lock = threading.Lock()
         self._cached: PluginSnapshot | None = None
         self._cached_at: float | None = None
+        # Wall-clock time of the last successful read, for last-seen data, and
+        # the plugin clock's, for how long last-seen data may stand in.
+        self._last_good_at: float | None = None
+        self._last_good_clock: float | None = None
 
     def validate_config(self, config: dict[str, Any]) -> None:
         if not isinstance(config, dict):
@@ -109,6 +114,8 @@ class OllamaQuotaPlugin:
                     "primary_percent": monthly.percent_used,
                     "primary_label": "MONTH",
                     "primary_reset_at": monthly.reset_at.isoformat() if monthly.reset_at else None,
+                    # The page gives the refill date only.
+                    "primary_reset_precision": "date",
                 },
             )
         return PluginSnapshot(
@@ -158,17 +165,27 @@ class OllamaQuotaPlugin:
         try:
             quota = self._fetch(self._build_ollama_config())
             snapshot = self._snapshot_from_quota(quota)
+            self._last_good_at = time.time()
+            self._last_good_clock = now
         except ScrapeError as exc:
             with self._lock:
                 if (
                     self._cached is not None
                     and self._cached.health.connected
-                    and self._cached_at is not None
-                    and now - self._cached_at < _STALE_GRACE_SECONDS + interval
+                    and self._last_good_clock is not None
+                    # Counted from the last good read, so repeated failures
+                    # end in the real error instead of grey numbers forever.
+                    and now - self._last_good_clock < _STALE_GRACE_SECONDS + interval
                 ):
+                    # Last good numbers, marked so keys draw them grey.
+                    seen = self._last_good_at or time.time()
                     stale = PluginSnapshot(
                         PluginHealth(True, "Connected (stale)"),
-                        signals=dict(self._cached.signals or {}),
+                        signals={
+                            **(self._cached.signals or {}),
+                            "stale": True,
+                            "seen_at": datetime.fromtimestamp(seen, timezone.utc).isoformat(),
+                        },
                     )
                     self._cached = stale
                     self._cached_at = now

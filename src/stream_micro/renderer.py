@@ -21,7 +21,7 @@ def status_color(percent: float, config: DisplayConfig) -> str:
     return config.healthy_color
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=32)
 def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
     """Load a font that can render CJK key labels before generic fallbacks.
 

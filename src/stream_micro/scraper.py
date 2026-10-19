@@ -140,11 +140,16 @@ def _monthly_window(document: str) -> QuotaWindow | None:
     refill = REFILL_PATTERN.search(re.sub(r"\s+", " ", visible))
     reset = None
     if refill is not None:
-        try:
-            day = datetime.strptime(refill.group("date").replace(",", ""), "%B %d %Y")
-            reset = day.replace(tzinfo=timezone.utc)
-        except ValueError:
-            reset = None
+        text = " ".join(refill.group("date").replace(",", "").split())
+        for pattern in ("%B %d %Y", "%b %d %Y"):  # "November 14 2026" or "Nov 14 2026"
+            try:
+                day = datetime.strptime(text, pattern)
+            except ValueError:
+                continue
+            # The page gives a date only: noon UTC keeps that calendar date in
+            # every time zone from UTC-11 to UTC+11.
+            reset = day.replace(hour=12, tzinfo=timezone.utc)
+            break
     return QuotaWindow(WindowKind.MONTHLY, min(max(used / limit * 100, 0.0), 100.0), reset)
 
 

@@ -34,6 +34,8 @@ class Mk2Settings:
     model: str = "mk2"
     device_serial: str | None = None
     brightness: int = 40
+    # Quota keys show what is "remaining" (a full green bar = plenty left) or "used".
+    quota_display: str = "remaining"
 
 
 @dataclass(frozen=True)
@@ -187,6 +189,8 @@ def validate_control_config(config: ControlConfig) -> None:
         or not 0 <= config.stream_deck.brightness <= 100
     ):
         raise ControlConfigError("stream_deck.brightness must be an integer between 0 and 100")
+    if config.stream_deck.quota_display not in ("remaining", "used"):
+        raise ControlConfigError("stream_deck.quota_display must be remaining or used")
     serial = config.stream_deck.device_serial
     if serial is not None and (not isinstance(serial, str) or not serial.strip()):
         raise ControlConfigError("stream_deck.device_serial must be a non-empty string or null")
@@ -213,6 +217,8 @@ def validate_control_config(config: ControlConfig) -> None:
             raise ControlConfigError(
                 f"buttons[{binding.key_index}].span > 1 requires a plugin"
             )
+        if binding.component == "quota" and binding.span != 1:
+            raise ControlConfigError(f"buttons[{binding.key_index}] quota keys use one key")
         if binding.key_index + binding.span > MK2_KEY_COUNT:
             raise ControlConfigError(
                 f"buttons[{binding.key_index}].span {binding.span} exceeds the 15-key layout"

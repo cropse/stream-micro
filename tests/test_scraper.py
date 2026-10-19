@@ -142,9 +142,16 @@ def test_monthly_credit_plans_are_read_with_their_refill_date() -> None:
     assert snapshot.monthly is not None
     assert snapshot.monthly.kind == WindowKind.MONTHLY
     assert round(snapshot.monthly.percent_used, 2) == 10.98
-    assert snapshot.monthly.reset_at == datetime(2026, 11, 14, tzinfo=timezone.utc)
+    assert snapshot.monthly.reset_at == datetime(2026, 11, 14, 12, tzinfo=timezone.utc)
 
 
 def test_a_page_with_no_quota_at_all_still_fails() -> None:
     with pytest.raises(ScrapeError, match="session, weekly"):
         parse_quota_page("<p>Settings</p>")
+
+
+def test_an_abbreviated_refill_month_is_read_too() -> None:
+    page = MONTHLY_HTML.replace("November 14, 2026", "Nov 14, 2026")
+    snapshot = parse_quota_page(page)
+    assert snapshot.monthly is not None
+    assert snapshot.monthly.reset_at == datetime(2026, 11, 14, 12, tzinfo=timezone.utc)

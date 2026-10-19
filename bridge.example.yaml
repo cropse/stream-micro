@@ -7,6 +7,7 @@ stream_deck:
   model: mk2
   device_serial: null
   brightness: 29
+  quota_display: remaining
 plugins:
   opencode:
     enabled: true

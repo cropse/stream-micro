@@ -46,6 +46,27 @@ so both surfaces use the same OpenCode Server.
 - When OpenChamber Desktop is running, Bridge auto-discovers its local control
   server and reads Sessions through its authenticated `/api` proxy. This keeps
   the Deck list and the OpenChamber UI on the same OpenCode Server.
+- Under the provider's line, the strip of a Session key shows its state. Bright
+  strips need a look:
+  `RUN` (working), `WAIT` (needs your input or approval), `DONE` (finished
+  recently), `ERR` (failed). Dark green strips are quiet: `IDLE` (open, no
+  active turn) and `OFF` (no live process).
+
+## Quota keys
+
+Quota keys show up to two windows (for example `5H` and `7D`) with a big
+number, a bar, and when a window resets: `TODAY 15:11` or `THU 20:25`. That is
+the first (5-hour) window, unless one is used up: then that one, or of several
+used up, the one that refills last. By default the number is what is **left**, so a full green bar
+means plenty of quota; the colour turns amber at 30% left and red at 10%.
+Grey numbers are the last values seen while their source is unreachable.
+Choose *Quota keys show → What is used* in the Dashboard's Configuration page,
+or set it in `bridge.yaml`:
+
+```yaml
+stream_deck:
+  quota_display: used  # remaining (default) | used
+```
 
 ## Plugins
 

@@ -205,4 +205,6 @@ select:disabled { cursor: not-allowed; opacity: .6; }
   .detail-column { grid-template-columns: 1fr; }
   .configuration-grid { grid-template-columns: 1fr; }
 }
+.deck-key em.state-chip, .session-item em.state-chip { display: inline-block; width: auto; padding: 1px 5px; border-radius: 4px; letter-spacing: .06em; }
+.stale-note { grid-column: 1 / -1; color: #8292aa; }
 .cookie-steps { margin: 8px 0 0; padding-left: 18px; color: #9eb0c9; font-size: 12px; line-height: 1.55; }

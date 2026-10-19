@@ -25,8 +25,9 @@ type CodexConfig = { enabled?: boolean; codex_path?: string | null; codex_home?:
 type ClaudeCodeConfig = { enabled?: boolean; claude_path?: string | null; claude_home?: string | null; plugin_dir?: string | null; max_sessions?: number };
 type OpenCodeConfig = { enabled?: boolean; endpoints?: string[]; password_env?: string | null };
 type PluginConfig = { enabled?: boolean; [key: string]: unknown };
+type QuotaDisplay = "remaining" | "used";
 type Config = {
-  stream_deck: { brightness: number; device_serial: string | null };
+  stream_deck: { brightness: number; device_serial: string | null; quota_display?: QuotaDisplay };
   plugins: Record<string, PluginConfig>;
   buttons: Button[];
 };
@@ -36,7 +37,7 @@ type PluginHealth = { connected: boolean; detail: string; endpoint?: string | nu
 type PluginSnapshot = {
   health: PluginHealth;
   sessions?: Session[];
-  signals?: Record<string, string | number | null> | null;
+  signals?: Record<string, string | number | boolean | null> | null;
 };
 type BridgeStatus = {
   selected_session_id?: string | null;
@@ -60,51 +61,71 @@ function displayName(value: string | null | undefined) {
   return value ? value.replace(/_/g, " ").replace(/\b\w/g, (letter: string) => letter.toUpperCase()) : "Not configured";
 }
 
+// Same colours as the physical keys: bright = needs a look, dark green = quiet.
 const SESSION_STATE_COLORS: Record<string, string> = {
-  idle: "#ffffff",
-  running: "#66d9ff",
+  idle: "#166534",
+  running: "#4a9eff",
   waiting: "#ffc15a",
-  completed: "#5af08c",
+  completed: "#ffffff",
   error: "#ff7983",
-  disconnected: "#6f8099",
+  disconnected: "#166534",
 };
+const DARK_SESSION_STATES = new Set(["idle", "disconnected"]);
 
 function sessionStateColor(state: string) {
   return SESSION_STATE_COLORS[state] ?? "#71819a";
 }
 
-function formatReset(value: string | number | null | undefined) {
+function sessionStateChip(state: string) {
+  return { background: sessionStateColor(state), color: DARK_SESSION_STATES.has(state) ? "#dcfce7" : "#08131f" };
+}
+
+function formatReset(value: string | number | boolean | null | undefined) {
   if (!value || typeof value !== "string") return "—";
   const parsed = new Date(value);
   return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString();
 }
 
-function pctColor(pct: number | null | undefined) {
-  if (pct == null) return "#71819a";
-  if (pct >= 90) return "#ef4444";
-  if (pct >= 70) return "#f59e0b";
+// Providers report how much is *used*; colour always follows what is left.
+function pctColor(usedPct: number | null | undefined) {
+  if (usedPct == null) return "#71819a";
+  if (usedPct >= 90) return "#ef4444";
+  if (usedPct >= 70) return "#f59e0b";
   return "#4de57a";
 }
 
-function UsageBars({ signals, generic = false }: {
-  signals: Record<string, string | number | null>;
+function quotaShown(usedPct: number, display: QuotaDisplay) {
+  const used = Math.min(Math.max(usedPct, 0), 100);
+  const value = display === "used" ? used : 100 - used;
+  return { value, text: `${Math.round(value)}% ${display === "used" ? "used" : "left"}` };
+}
+
+const STALE_COLOR = "#6f8099";
+
+function UsageBars({ signals, generic = false, display = "remaining" }: {
+  signals: Record<string, string | number | boolean | null>;
   generic?: boolean;
+  display?: QuotaDisplay;
 }) {
-  const primary = (generic ? signals.primary_percent : signals.session_percent) as number | null;
-  const secondary = (generic ? signals.secondary_percent : signals.weekly_percent) as number | null;
+  const primary = (generic ? signals.primary_percent : signals.session_percent) as number | null | undefined;
+  const secondary = (generic ? signals.secondary_percent : signals.weekly_percent) as number | null | undefined;
   const primaryReset = generic ? signals.primary_reset_at : signals.session_reset_at;
   const secondaryReset = generic ? signals.secondary_reset_at : signals.weekly_reset_at;
+  // Last-seen numbers from an unreachable source are grey, never green.
+  const stale = Boolean(signals.stale);
+  const tint = (used: number | null | undefined) => stale ? STALE_COLOR : pctColor(used);
   const primaryLabel = generic ? String(signals.primary_label ?? "Primary") : "Session";
   const secondaryLabel = generic ? String(signals.secondary_label ?? "Secondary") : "Weekly";
-  return <div className="ollama-usage-grid">
+  return <div className={`ollama-usage-grid${stale ? " is-stale" : ""}`}>
+    {stale && <small className="stale-note">Last seen{typeof signals.seen_at === "string" ? ` ${formatReset(signals.seen_at)}` : ""} — the source is not reachable now.</small>}
     <div className="usage-bar">
-      <div className="usage-bar-label"><span>{primaryLabel}</span><b style={{ color: pctColor(primary) }}>{primary != null ? `${primary}%` : "—"}</b></div>
-      <div className="usage-bar-track"><div className="usage-bar-fill" style={{ width: `${primary ?? 0}%`, background: pctColor(primary) }} /></div>
+      <div className="usage-bar-label"><span>{primaryLabel}</span><b style={{ color: tint(primary) }}>{primary != null ? quotaShown(primary, display).text : "—"}</b></div>
+      <div className="usage-bar-track"><div className="usage-bar-fill" style={{ width: `${primary != null ? quotaShown(primary, display).value : 0}%`, background: tint(primary) }} /></div>
       <small>Resets: {formatReset(primaryReset)}</small>
     </div>
     <div className="usage-bar">
-      <div className="usage-bar-label"><span>{secondaryLabel}</span><b style={{ color: pctColor(secondary) }}>{secondary != null ? `${secondary}%` : "—"}</b></div>
-      <div className="usage-bar-track"><div className="usage-bar-fill" style={{ width: `${secondary ?? 0}%`, background: pctColor(secondary) }} /></div>
+      <div className="usage-bar-label"><span>{secondaryLabel}</span><b style={{ color: tint(secondary) }}>{secondary != null ? quotaShown(secondary, display).text : "—"}</b></div>
+      <div className="usage-bar-track"><div className="usage-bar-fill" style={{ width: `${secondary != null ? quotaShown(secondary, display).value : 0}%`, background: tint(secondary) }} /></div>
       <small>Resets: {formatReset(secondaryReset)}</small>
     </div>
   </div>;
@@ -175,7 +196,7 @@ function OllamaQuotaCard({ config, snapshot, updateConfig }: {
         <span>{health.detail}</span>
       </div>
     )}
-    {signals && <UsageBars signals={signals} />}
+    {signals && <UsageBars signals={signals} generic={typeof signals.primary_percent === "number"} display={config?.stream_deck.quota_display ?? "remaining"} />}
   </section>;
 }
 
@@ -209,7 +230,7 @@ function CodexCard({ config, snapshot, updateConfig }: {
     </details>
     {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
     <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>recent Codex chats available to session keys</span></div>
-    {snapshot?.signals && <UsageBars signals={snapshot.signals} generic />}
+    {snapshot?.signals && <UsageBars signals={snapshot.signals} generic display={config?.stream_deck.quota_display ?? "remaining"} />}
   </section>;
 }
 
@@ -249,7 +270,7 @@ function ClaudeCodeCard({ config, snapshot, updateConfig }: {
     </details>
     {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
     <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>recent Claude Code Sessions available to button zones</span></div>
-    {snapshot?.signals && <UsageBars signals={snapshot.signals} generic />}
+    {snapshot?.signals && <UsageBars signals={snapshot.signals} generic display={config?.stream_deck.quota_display ?? "remaining"} />}
     <p className="provider-note">The companion hook adds live Session status. Quota appears after Claude Code's status line receives its first API response.</p>
   </section>;
 }
@@ -611,11 +632,13 @@ function App() {
       return;
     }
     const plugin = manifests.find((manifest) => manifest.id === pluginId);
+    const component = plugin?.components[0] ?? null;
     updateBinding({
       plugin: pluginId,
-      component: plugin?.components[0] ?? null,
+      component,
       span: 1,
-      action: plugin?.actions[0] ?? null,
+      // Quota keys only display; they never run a Session action.
+      action: component === "quota" ? null : plugin?.actions[0] ?? null,
       session_id: null,
       action_params: {},
       window_binding: null,
@@ -625,8 +648,9 @@ function App() {
   const changeComponent = (component: string) => {
     updateBinding({
       component: component || null,
-      action: selectedManifest?.actions[0] ?? null,
+      action: component === "quota" ? null : selectedManifest?.actions[0] ?? null,
       session_id: null,
+      span: 1,
       action_params: {},
     });
   };
@@ -692,11 +716,13 @@ function App() {
             const isChild = parent !== undefined && parent.key_index !== index;
             const isParent = parent !== undefined && parent.key_index === index;
             const isQuota = button?.component === "quota";
-            const quotaPercent = snapshot?.signals?.primary_percent ?? snapshot?.signals?.session_percent;
+            const quotaPercent = snapshot?.signals?.primary_percent ?? snapshot?.signals?.session_percent ?? snapshot?.signals?.secondary_percent ?? snapshot?.signals?.weekly_percent;
             const label = session?.title ?? (isQuota ? `${displayName(pluginId)} quota` : isChild ? "Session slot" : displayName(button?.component ?? null));
             const sublabel = session ? `${displayName(pluginId)} · ${session.project ?? "No project"}` : isChild ? `${displayName(pluginId)} · slot ${index - (parent?.key_index ?? 0) + 1}` : pluginId ? displayName(pluginId) : "Unassigned";
-            const state = session?.state ?? (isQuota && quotaPercent != null ? `${quotaPercent}% used` : snapshot && !snapshot.health.connected ? snapshot.health.detail : button?.action ? displayName(button.action) : "No action");
-            const stateColor = session ? sessionStateColor(session.state) : isQuota && typeof quotaPercent === "number" ? pctColor(quotaPercent) : undefined;
+            const quotaDisplay = config?.stream_deck.quota_display ?? "remaining";
+            const quotaStale = Boolean(snapshot?.signals?.stale);
+            const state = session?.state ?? (isQuota && typeof quotaPercent === "number" ? `${quotaShown(quotaPercent, quotaDisplay).text}${quotaStale ? " (last seen)" : ""}` : snapshot && !snapshot.health.connected ? snapshot.health.detail : isQuota ? "No quota data" : button?.action ? displayName(button.action) : "No action");
+            const stateColor = !session && isQuota && typeof quotaPercent === "number" ? quotaStale ? STALE_COLOR : pctColor(quotaPercent) : undefined;
             const isPinned = status?.pinned_sessions?.[String(index)]?.plugin === pluginId;
             return <button
               key={index}
@@ -711,7 +737,7 @@ function App() {
               onDragOver={(event) => handleDragOver(event, index)}
               onDragLeave={handleDragLeave}
               onDrop={() => handleDrop(index)}
-            ><span className="key-index">{index + 1}</span><strong>{label}</strong><small>{sublabel}</small><em style={stateColor ? { color: stateColor } : undefined}>{state}</em><span className="drag-handle" aria-hidden="true">⠿</span></button>;
+            ><span className="key-index">{index + 1}</span><strong>{label}</strong><small>{sublabel}</small><em className={session ? "state-chip" : undefined} style={session ? sessionStateChip(session.state) : stateColor ? { color: stateColor } : undefined}>{state}</em><span className="drag-handle" aria-hidden="true">⠿</span></button>;
           })}
         </div></div>
         <div className="deck-legend"><span><i className="legend-dot editing-dot" /> Editing key</span><span><i className="legend-dot pinned-dot" /> Pinned Session</span><span><i className="legend-dot session-dot" /> Live Session display</span><span><i className="legend-dot" /> Other / unassigned</span></div>
@@ -739,12 +765,12 @@ function App() {
               <input type="number" min={1} max={15 - editingKey} value={selectedBinding?.span ?? 1} onChange={(event) => changeSpan(Number(event.target.value))} />
             </label>
           )}
-          <label>Physical-key action
+          {selectedBinding?.component === "quota" ? <p className="editor-hint">Quota keys only display usage; pressing them does nothing.</p> : <label>Physical-key action
             <select disabled={!selectedManifest} value={selectedBinding?.action ?? ""} onChange={(event) => updateBinding({ action: event.target.value || null, action_params: {} })}>
               <option value="">No action</option>
               {selectedManifest?.actions.map((action) => <option key={action} value={action}>{displayName(action)}</option>)}
             </select>
-          </label>
+          </label>}
           <div className="binding-explainer">
             {selectedBinding?.plugin === "opencode" && selectedBinding.component === "session" ? <>
               <b>Session zone (span {selectedBinding.span})</b><span>This key and {(selectedBinding.span ?? 1) - 1} key{(selectedBinding.span ?? 1) > 2 ? "s" : ""} to its right show live Sessions. Each physical press focuses that slot's Session in OpenChamber.</span>
@@ -779,7 +805,7 @@ function App() {
                       <strong>{session.title || "Untitled session"}</strong>
                       <small>{session.project ?? "No project"}</small>
                     </span>
-                    <em style={{ color: sessionStateColor(session.state) }}>{session.state}</em>
+                    <em className="state-chip" style={sessionStateChip(session.state)}>{session.state}</em>
                   </button>
                 ))}
                 {selectedProviderSessions.length === 0 && <p className="session-list-empty">No live {displayName(selectedBinding.plugin)} sessions available.</p>}
@@ -800,6 +826,12 @@ function App() {
           <h2>Stream Deck MK.2</h2>
           <div><b>{status?.device.connected ? "Ready" : "Waiting"}</b><span>{status?.device.detail || "Checking hardware"}</span></div>
           <label>Brightness<input type="range" min="0" max="100" value={config?.stream_deck.brightness ?? 40} onChange={(event) => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, brightness: Number(event.target.value) } }))} /></label>
+          <label>Quota keys show
+            <select value={config?.stream_deck.quota_display ?? "remaining"} onChange={(event) => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, quota_display: event.target.value as QuotaDisplay } }))}>
+              <option value="remaining">What is left (full green bar = plenty)</option>
+              <option value="used">What is used</option>
+            </select>
+          </label>
         </section>
         <OpenCodeCard config={config} snapshot={snapshots.opencode} updateConfig={updateConfig} />
         <CodexCard config={config} snapshot={snapshots.codex} updateConfig={updateConfig} />

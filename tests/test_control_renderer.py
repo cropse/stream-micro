@@ -41,8 +41,8 @@ def test_session_key_renders_name_project_folder_and_state() -> None:
         for x in range(image.width)
         for y in range(image.height)
     )  # Legacy unbound green frame.
-    # State is a full-width, bright badge so it stays readable on the physical Deck.
-    assert image.getpixel((8, 72)) == (74, 158, 255)
+    # State is a full-width top strip so it is the first thing seen on the Deck.
+    assert image.getpixel((8, 10)) == (74, 158, 255)  # the state strip, under the line
 
 
 def test_session_title_wraps_to_two_lines_before_truncating() -> None:
@@ -76,7 +76,8 @@ def test_claude_code_session_uses_its_provider_accent() -> None:
         provider_id="claude_code",
     )
 
-    assert image.getpixel((10, 1)) == (226, 139, 103)
+    assert image.getpixel((10, 0)) == (226, 139, 103)  # the provider line, on top
+    assert image.getpixel((10, 8)) != (226, 139, 103)  # the state strip right under it
 
 
 def test_codex_and_opencode_session_keys_have_distinct_provider_identity() -> None:
@@ -94,8 +95,8 @@ def test_codex_and_opencode_session_keys_have_distinct_provider_identity() -> No
         size=(96, 96),
     )
 
-    assert codex.getpixel((10, 1)) == (72, 224, 180)
-    assert opencode.getpixel((10, 1)) == (138, 167, 255)
+    assert codex.getpixel((10, 0)) == (72, 224, 180)
+    assert opencode.getpixel((10, 0)) == (138, 167, 255)
     assert codex.tobytes() != opencode.tobytes()
 
 
@@ -131,3 +132,259 @@ def test_quota_key_renders_generic_primary_and_secondary_windows() -> None:
     # Primary bar spans y≈44..49, secondary bar y≈73..78 on a 96px key.
     assert image.getpixel((6, 47)) == (34, 197, 94)
     assert image.getpixel((6, 76)) == (245, 158, 11)
+
+
+def _ink_columns(
+    image: Image.Image, top: int, bottom: int, background: object | None = None
+) -> set[int]:
+    if background is None:
+        background = image.getpixel((image.width // 2, image.height - 2))
+    return {
+        x
+        for x in range(image.width)
+        for y in range(top, bottom)
+        if image.getpixel((x, y)) not in (background,)
+    }
+
+
+def test_quota_windows_keep_usage_canonical_and_show_either_mode() -> None:
+    from stream_micro.control_renderer import quota_windows
+
+    windows = quota_windows(
+        {"primary_percent": 30, "primary_label": "5h", "secondary_percent": float("nan")}
+    )
+    assert len(windows) == 1
+    window = windows[0]
+    assert (window.label, window.used, window.remaining) == ("5H", 30.0, 70.0)
+    assert window.shown("remaining") == 70.0
+    assert window.shown("used") == 30.0
+
+
+def test_quota_colour_follows_what_is_left_in_both_display_modes() -> None:
+    def colours(display: str) -> set:
+        image = render_quota_key(
+            ButtonBinding(key_index=5, plugin="codex", component="quota"),
+            PluginSnapshot(
+                PluginHealth(True, "ok"), (), {"primary_percent": 95, "primary_label": "5H"}
+            ),
+            size=(72, 72),
+            display=display,
+        )
+        return {color for _count, color in image.getcolors(maxcolors=72 * 72) or []}
+
+    for display in ("remaining", "used"):
+        assert (239, 68, 68) in colours(display)  # 5% left is red either way
+        assert (34, 197, 94) not in colours(display)
+
+
+def test_quota_rows_stay_inside_a_72px_key() -> None:
+    from stream_micro.control_renderer import _quota_row
+
+    draw = ImageDraw.Draw(Image.new("RGB", (72, 72)))
+    for label in ("SESSION", "WEEK", "5H", "7D", "CLA", "GEM"):
+        for value in ("0%", "9%", "99%", "100%"):
+            for size in (22, 19, 16):
+                fitted = _quota_row(draw, label, value, size, 1.0, 66)
+                _label, _lf, label_width, _nf, number_width, gap, _size = fitted
+                assert label_width + gap + number_width <= 66, (label, value, size)
+
+    image = render_quota_key(
+        ButtonBinding(key_index=5, plugin="ollama_quota", component="quota"),
+        PluginSnapshot(
+            PluginHealth(True, "ok"),
+            (),
+            {"session_percent": 0, "weekly_percent": 0},  # legacy SESSION / WEEK labels
+        ),
+        size=(72, 72),
+    )
+    edges = _ink_columns(image, 14, 60) & {0, 1, 70, 71}
+    assert not edges
+
+
+def test_long_session_titles_stay_inside_a_72px_key() -> None:
+    for title in (
+        "A deliberately long Section title that must fit somewhere",
+        "非常長的中文工作階段標題必須在按鍵範圍內換行顯示",
+    ):
+        image = render_control_key(
+            ButtonBinding(key_index=0, plugin="claude_code", component="session"),
+            AgentSession("s", title, SessionState.RUNNING, "stream-micro"),
+            selected=False,
+            size=(72, 72),
+            provider_id="claude_code",
+        )
+        claude_background = (37, 24, 17)
+        assert not _ink_columns(image, 19, 66, claude_background) & {0, 71}
+
+
+def test_footer_shows_the_reset_of_the_most_depleted_window() -> None:
+    from datetime import datetime, timezone
+
+    from stream_micro.control_renderer import _format_reset, quota_windows
+
+    windows = quota_windows(
+        {
+            "primary_percent": 20,
+            "primary_reset_at": "2026-10-08T05:00:00Z",
+            "secondary_percent": 90,
+            "secondary_reset_at": "2026-10-11T12:00:00Z",
+        }
+    )
+    binding = min(windows, key=lambda window: window.remaining)
+    assert binding.reset_at == "2026-10-11T12:00:00Z"
+
+    now = datetime(2026, 10, 8, 9, 0).astimezone()
+    today = now.replace(hour=15, minute=11).astimezone(timezone.utc).isoformat()
+    friday = datetime(2026, 10, 9, 20, 25).astimezone().astimezone(timezone.utc).isoformat()
+    assert _format_reset(today, now=now) == "TODAY 15:11"
+    assert _format_reset(friday, now=now) == "FRI 20:25"
+    assert _format_reset(None, now=now) == "RESET --"
+    assert _format_reset("not a time", now=now) == "RESET --"
+
+
+def test_titles_wrap_between_words_and_at_natural_breaks() -> None:
+    draw = ImageDraw.Draw(Image.new("RGB", (72, 72)))
+    font = _font(14, bold=True)
+    from stream_micro.control_renderer import _wrap_lines
+
+    assert _wrap_lines(draw, "小說skill", _font(17, bold=True), 66, 3)[0] == "小說\nskill"
+    assert _wrap_lines(draw, "ClaudeProject 資料分析", font, 66, 3)[0].startswith(
+        "Claude\nProject"
+    )
+    long_title = "A deliberately long Section title that must fit"
+    text, truncated = _wrap_lines(draw, long_title, font, 66, 2)
+    assert truncated and text.endswith("…")
+    assert all(not line.startswith(" ") for line in text.split("\n"))
+
+
+def test_stale_quota_is_drawn_grey_even_when_the_source_is_down() -> None:
+    stale = PluginSnapshot(
+        PluginHealth(False, "not reachable; showing last seen quota"),
+        (),
+        {"primary_percent": 0, "primary_label": "5H", "stale": True},
+    )
+    image = render_quota_key(
+        ButtonBinding(key_index=7, plugin="codex", component="quota"), stale, size=(72, 72)
+    )
+    colours = {color for _count, color in image.getcolors(maxcolors=72 * 72) or []}
+    assert (111, 128, 153) in colours  # grey numbers and bar
+    assert (34, 197, 94) not in colours
+
+
+def test_long_titles_on_error_keys_are_cut_not_clipped() -> None:
+    image = render_quota_key(
+        ButtonBinding(key_index=7, plugin="a_very_long_provider_name_for_quota", component="quota"),
+        PluginSnapshot(PluginHealth(False, "Not reachable")),
+        size=(72, 72),
+    )
+    assert not _ink_columns(image, 10, 24, (16, 24, 39)) & {0, 1, 70, 71}
+
+
+def test_title_size_prefers_whole_words_over_a_bigger_split_word() -> None:
+    from stream_micro.control_renderer import _wrap_lines
+
+    draw = ImageDraw.Draw(Image.new("RGB", (72, 72)))
+    # At 17 px "Release" alone is wider than the key; 14 px keeps it whole.
+    assert _wrap_lines(draw, "Release notes", _font(17, bold=True), 66, 2, split_words=False)[1]
+    image = render_control_key(
+        ButtonBinding(key_index=0, plugin="claude_code", component="session"),
+        AgentSession("s", "Release notes", SessionState.COMPLETED, "docs"),
+        selected=False,
+        size=(72, 72),
+        provider_id="claude_code",
+    )
+    assert image.size == (72, 72)
+    text, truncated = _wrap_lines(draw, "Release notes", _font(14, bold=True), 66, 3,
+                                  split_words=False)
+    assert not truncated and "Releas\n" not in text
+
+
+def test_three_line_titles_never_run_into_the_project_line() -> None:
+    background = (37, 24, 17)
+    image = render_control_key(
+        ButtonBinding(key_index=0, plugin="claude_code", component="session"),
+        AgentSession("s", "Refactor settings page", SessionState.IDLE, "web-app"),
+        selected=False,
+        size=(72, 72),
+        provider_id="claude_code",
+    )
+    # A blank row must separate the title from the project name.
+    rows = [
+        y for y in range(52, 60)
+        if all(image.getpixel((x, y)) == background for x in range(2, 70))
+    ]
+    assert rows
+
+
+def test_resets_a_week_or_more_away_show_their_date() -> None:
+    from datetime import datetime, timezone
+
+    from stream_micro.control_renderer import _format_reset
+
+    now = datetime(2026, 10, 14, 9, 0).astimezone()
+    next_month = datetime(2026, 11, 14, 12, 0).astimezone().astimezone(timezone.utc).isoformat()
+    assert _format_reset(next_month, now=now) == "NOV 14"
+
+
+def test_footer_shows_the_reset_of_a_window_that_refills() -> None:
+    from stream_micro.control_renderer import QuotaWindow, _binding_window
+
+    credit = QuotaWindow("CREDIT", 90.0, None)  # most depleted, never refills
+    five_hours = QuotaWindow("5H", 60.0, "2026-10-14T12:00:00Z")
+    assert _binding_window([credit, five_hours]) is five_hours
+    week = QuotaWindow("WEEK", 70.0, "2026-10-18T12:00:00Z")
+    assert _binding_window([five_hours, week]) is five_hours  # the first, until one is used up
+    assert _binding_window([credit]) is credit
+
+
+def test_the_footer_shows_5h_until_a_window_is_used_up() -> None:
+    from stream_micro.control_renderer import QuotaWindow, _binding_window
+
+    five_hours = QuotaWindow("5H", 20, "2026-10-16T08:00:00Z")  # 80% left
+    week = QuotaWindow("7D", 50, "2026-10-19T00:00:00Z")  # 50% left
+    month = QuotaWindow("MO", 10, "2026-11-16T00:00:00Z")
+    assert _binding_window([five_hours, week, month]) is five_hours
+    used_week = QuotaWindow("7D", 100, week.reset_at)
+    assert _binding_window([five_hours, used_week, month]) is used_week
+    used_five = QuotaWindow("5H", 100, five_hours.reset_at)
+    assert _binding_window([used_five, used_week, month]) is used_week
+    used_month = QuotaWindow("MO", 100, month.reset_at)
+    assert _binding_window([used_five, used_week, used_month]) is used_month
+
+
+def test_a_reset_in_the_past_shows_its_date_not_a_weekday() -> None:
+    from datetime import datetime, timezone
+
+    from stream_micro.control_renderer import _format_reset
+
+    now = datetime(2026, 10, 14, 9, 0).astimezone()
+    yesterday = datetime(2026, 10, 13, 15, 0).astimezone().astimezone(timezone.utc).isoformat()
+    assert _format_reset(yesterday, now=now) == "OCT 13"
+
+
+def test_the_legacy_ollama_alias_follows_the_display_setting() -> None:
+    from stream_micro.control_renderer import render_ollama_key
+
+    binding = ButtonBinding(key_index=4, plugin="ollama_quota", component="quota")
+    snapshot = PluginSnapshot(PluginHealth(True, "Connected"), signals={"session_percent": 20.0})
+    remaining = render_ollama_key(binding, snapshot, size=(72, 72))
+    used = render_ollama_key(binding, snapshot, size=(72, 72), display="used")
+    assert remaining.tobytes() == render_quota_key(binding, snapshot, size=(72, 72)).tobytes()
+    assert used.tobytes() != remaining.tobytes()
+
+
+def test_a_reset_known_only_as_a_date_shows_no_invented_time() -> None:
+    from datetime import datetime, timezone
+
+    from stream_micro.control_renderer import _format_reset, quota_windows
+
+    now = datetime(2026, 10, 14, 9, 0).astimezone()
+    thursday = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc).isoformat()  # noon UTC
+    assert _format_reset(thursday, now=now, date_only=True) == "THU"
+    today = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc).isoformat()
+    assert _format_reset(today, now=now, date_only=True) == "TODAY"
+    windows = quota_windows(
+        {"primary_percent": 40, "primary_reset_at": thursday, "primary_reset_precision": "date"}
+    )
+    assert windows[0].date_only
+

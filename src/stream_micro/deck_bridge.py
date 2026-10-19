@@ -63,6 +63,7 @@ class Mk2BridgeRunner:
                     binding,
                     snapshots.get(binding.plugin or ""),
                     size=output.key_size,
+                    display=self.service.config.stream_deck.quota_display,
                 )
             else:
                 image = render_control_key(
