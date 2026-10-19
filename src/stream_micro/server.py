@@ -4,22 +4,45 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .bridge import BridgeError, BridgeService
+from .claude_setup import ClaudeSetupError
 from .control_config import ControlConfigError
 from .device import DeviceError, discover_mk2_devices
 from .plugins.antigravity import AntigravityError
 from .plugins.claude_code import ClaudeCodeError
 from .plugins.codex import CodexError
 from .plugins.opencode import OpenCodeError
+
+_LOOPBACK_NAMES = ("127.0.0.1", "localhost", "::1")
+
+
+def own_page_only(request: Request) -> None:
+    """Refuse a browser request that comes from another site or a rebound name.
+
+    Browsers send Origin with every PUT; it must be this page's own, and the
+    Host a loopback name, so a page that rebinds its DNS name to 127.0.0.1
+    cannot change settings. Requests without Origin (scripts, tests) pass.
+    """
+
+    origin = request.headers.get("origin")
+    if origin is None:
+        return
+    host = request.headers.get("host", "")
+    name = host[1 : host.find("]")] if host.startswith("[") else host.split(":")[0]
+    if name not in _LOOPBACK_NAMES or origin not in (f"http://{host}", f"https://{host}"):
+        raise HTTPException(
+            status_code=403, detail="Only this Bridge's own dashboard may change its settings"
+        )
 
 
 def create_app(config_path: Path | str, *, service: BridgeService | None = None) -> FastAPI:
@@ -40,7 +63,8 @@ def create_app(config_path: Path | str, *, service: BridgeService | None = None)
         return service.public_config_data()
 
     @app.put("/api/config")
-    def put_config(data: dict[str, Any]) -> dict[str, Any]:
+    def put_config(data: dict[str, Any], request: Request) -> dict[str, Any]:
+        own_page_only(request)
         try:
             return service.replace_config(data)
         except ControlConfigError as exc:
@@ -98,6 +122,33 @@ def create_app(config_path: Path | str, *, service: BridgeService | None = None)
             return service.handle_claude_code_hook(data)
         except (BridgeError, ClaudeCodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    def same_origin_only(request: Request) -> None:
+        """Writing Claude Code's settings needs our own page: an Origin (always
+        sent by browsers) for this loopback Host, and a header a plain
+        cross-site form cannot set."""
+
+        if request.headers.get("origin") is None or request.headers.get("x-stream-micro") != "1":
+            raise HTTPException(status_code=403, detail="Only the Deck Bridge page may do this")
+        own_page_only(request)
+
+    @app.get("/api/claude-code/setup")
+    def get_claude_setup() -> dict[str, Any]:
+        return service.claude_setup_status()
+
+    @app.post("/api/claude-code/setup")
+    def post_claude_setup(data: dict[str, Any], request: Request) -> dict[str, Any]:
+        same_origin_only(request)
+        parts = data.get("parts")
+        try:
+            return service.change_claude_setup(
+                str(data.get("action")),
+                set(parts) if isinstance(parts, list) else set(),
+                data.get("replace_statusline") is True,
+                data.get("chain_statusline") is True,
+            )
+        except ClaudeSetupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/hooks/claude-code/quota")
     def post_claude_code_quota(data: dict[str, Any]) -> dict[str, str | bool | None]:
@@ -172,6 +223,10 @@ def create_app(config_path: Path | str, *, service: BridgeService | None = None)
 
     dashboard_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if (dashboard_dir / "index.html").is_file():
+        # Windows registry entries can map .js to text/plain, which browsers reject
+        # for module scripts.
+        mimetypes.add_type("text/javascript", ".js")
+        mimetypes.add_type("text/css", ".css")
         app.mount("/", StaticFiles(directory=dashboard_dir, html=True), name="dashboard")
 
     return app

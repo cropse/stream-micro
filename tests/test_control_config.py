@@ -89,3 +89,43 @@ def test_control_config_validates_antigravity_even_when_disabled() -> None:
 
     with pytest.raises(ControlConfigError, match=r"plugins\.antigravity\.agy_path"):
         parse_control_config(data)
+
+
+def test_quota_display_defaults_to_remaining_and_rejects_unknown_modes() -> None:
+    data = control_config_data(default_control_config())
+    data["stream_deck"].pop("quota_display")
+    assert parse_control_config(data).stream_deck.quota_display == "remaining"
+
+    data["stream_deck"]["quota_display"] = "used"
+    assert parse_control_config(data).stream_deck.quota_display == "used"
+
+    data["stream_deck"]["quota_display"] = "percent"
+    with pytest.raises(ControlConfigError, match="quota_display"):
+        parse_control_config(data)
+
+
+def test_quota_keys_cover_exactly_one_key() -> None:
+    data = control_config_data(default_control_config())
+    data["buttons"] = list(data["buttons"])
+    data["buttons"][5] = {**data["buttons"][5], "plugin": "ollama_quota", "component": "quota",
+                          "span": 2}
+    with pytest.raises(ControlConfigError, match="one key"):
+        parse_control_config(data)
+
+
+def test_quota_keys_accept_only_text_account_and_label_options() -> None:
+    data = control_config_data(default_control_config())
+    data["buttons"] = list(data["buttons"])
+    data["buttons"][5] = {
+        **data["buttons"][5],
+        "plugin": "ollama_quota",
+        "component": "quota",
+        "action": None,
+        "action_params": {"account": "codex-a.json", "label": "Codex 1"},
+    }
+    parse_control_config(data)
+
+    for bad in ({"account": ["a", "b"]}, {"label": {"text": "x"}}, {"command": "rm"}):
+        data["buttons"][5]["action_params"] = bad
+        with pytest.raises(ControlConfigError):
+            parse_control_config(data)

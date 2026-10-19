@@ -6,6 +6,10 @@ notification type, optional Session title, and at most 200 characters of the
 submitted prompt. Failures are ignored so the integration cannot block Claude
 Code.
 
+The easiest way to install it for every Session is the Claude Code card in the
+Bridge Dashboard (Configuration): it writes the hook and the status line into
+`~/.claude/settings.json` with the Bridge's port, and can remove them again.
+
 For a one-session check, start Claude Code with:
 
 ```powershell
@@ -14,8 +18,9 @@ claude --plugin-dir integrations/claude-code-stream-micro
 
 The Bridge listens on
 `http://127.0.0.1:8765/api/hooks/claude-code` by default. Set
-`STREAM_MICRO_CLAUDE_HOOK_URL` before starting Claude Code if the Bridge uses a
-different loopback port.
+`STREAM_MICRO_CLAUDE_HOOK_URL` before starting Claude Code (or pass
+`--stream-micro-url=<url>` to the script, as the Dashboard's installer does) if
+the Bridge uses a different loopback port.
 
 ## Quota
 

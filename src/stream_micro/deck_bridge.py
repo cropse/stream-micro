@@ -8,7 +8,7 @@ from collections.abc import Callable
 from threading import Event
 
 from .bridge import BridgeError, BridgeService
-from .control_config import ButtonBinding
+from .control_config import ButtonBinding, reset_thresholds_for
 from .control_renderer import render_control_key, render_quota_key
 from .device import DeviceError, Mk2DeckOutput
 from .plugins.base import AgentSession
@@ -63,6 +63,8 @@ class Mk2BridgeRunner:
                     binding,
                     snapshots.get(binding.plugin or ""),
                     size=output.key_size,
+                    display=self.service.config.stream_deck.quota_display,
+                    thresholds=reset_thresholds_for(self.service.config.stream_deck, binding),
                 )
             else:
                 image = render_control_key(
@@ -76,6 +78,10 @@ class Mk2BridgeRunner:
                     pinned=self.service.is_key_pinned(binding.key_index),
                     size=output.key_size,
                     provider_id=parent.plugin if parent is not None else binding.plugin,
+                    # A zone's keys share its accent.
+                    accent_color=(parent or binding).accent,
+                    state_colors=self.service.config.stream_deck.state_colors,
+                    accent_line=self.service.config.stream_deck.session_accent_line,
                 )
             output.set_key(binding.key_index, image)
 

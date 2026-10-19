@@ -6,6 +6,9 @@ the Bridge is being introduced.  The `serve` command will use this contract.
 
 from __future__ import annotations
 
+import os
+import re
+import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -15,7 +18,15 @@ import yaml
 from .plugins.antigravity import AntigravityError, validate_antigravity_config
 
 MK2_KEY_COUNT = 15
+# Display options a display-only quota key may keep in action_params:
+# "account" picks one account of a multi-account source, "label" renames the key.
+QUOTA_DISPLAY_PARAMS = frozenset({"account", "label"})
 SCHEMA_VERSION = 1
+# Colours the dashboard may set: a key's accent, and each Session state's colour.
+SESSION_STATE_NAMES = frozenset(
+    {"idle", "running", "background", "waiting", "completed", "error", "disconnected"}
+)
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 class ControlConfigError(ValueError):
@@ -29,11 +40,37 @@ class BridgeSettings:
     refresh_interval_seconds: float = 5.0
 
 
+RESET_THRESHOLD_WINDOWS = ("7D", "MO")
+
+
+def reset_thresholds_for(settings: Mk2Settings, binding: ButtonBinding) -> dict[str, int]:
+    """The thresholds a quota key uses: the shared default, then its service's own."""
+
+    service = binding.plugin or ""
+    account = binding.action_params.get("account") if binding.action_params else None
+    if service == "http_quota" and isinstance(account, str) and account:
+        service = f"http_quota:{account}"
+    return {
+        **settings.reset_thresholds.get("default", {}),
+        **settings.reset_thresholds.get(service, {}),
+    }
+
+
 @dataclass(frozen=True)
 class Mk2Settings:
     model: str = "mk2"
     device_serial: str | None = None
     brightness: int = 40
+    # Quota keys show what is "remaining" (a full green bar = plenty left) or "used".
+    quota_display: str = "remaining"
+    # Session state -> "#rrggbb", replacing the built-in strip colours.
+    state_colors: dict[str, str] = field(default_factory=dict)
+    # Session keys draw the provider colour as a top line (quota keys always do).
+    session_accent_line: bool = True
+    # When a 7D or MO window has at most this % left, the footer shows its reset
+    # as if it were used up. "default" applies to every key; a service key
+    # ("claude_code", "http_quota:<source id>", ...) overrides it. 5H stays at 0.
+    reset_thresholds: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -46,6 +83,8 @@ class ButtonBinding:
     action: str | None = None
     action_params: dict[str, Any] = field(default_factory=dict)
     window_binding: dict[str, str] | None = None
+    # "#rrggbb" for the key's accent line and title, instead of the provider's.
+    accent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +126,7 @@ def default_control_config() -> ControlConfig:
                 "refresh_interval_seconds": 60.0,
             },
             "codex": {"enabled": False, "codex_path": None, "codex_home": None},
+            "http_quota": {"enabled": False, "sources": []},
             "claude_code": {
                 "enabled": False,
                 "claude_path": None,
@@ -193,6 +233,34 @@ def validate_control_config(config: ControlConfig) -> None:
         or not 0 <= config.stream_deck.brightness <= 100
     ):
         raise ControlConfigError("stream_deck.brightness must be an integer between 0 and 100")
+    if config.stream_deck.quota_display not in ("remaining", "used"):
+        raise ControlConfigError("stream_deck.quota_display must be remaining or used")
+    if not isinstance(config.stream_deck.session_accent_line, bool):
+        raise ControlConfigError("stream_deck.session_accent_line must be true or false")
+    thresholds = config.stream_deck.reset_thresholds
+    if not isinstance(thresholds, dict):
+        raise ControlConfigError("stream_deck.reset_thresholds must be a mapping")
+    for service, windows in thresholds.items():
+        if not isinstance(service, str) or not service or not isinstance(windows, dict):
+            raise ControlConfigError("stream_deck.reset_thresholds maps a service to its windows")
+        for window, percent in windows.items():
+            if window not in RESET_THRESHOLD_WINDOWS:
+                raise ControlConfigError(
+                    f"stream_deck.reset_thresholds.{service}: windows are "
+                    f"{', '.join(RESET_THRESHOLD_WINDOWS)}"
+                )
+            if isinstance(percent, bool) or not isinstance(percent, int) or not 0 <= percent <= 90:
+                raise ControlConfigError(
+                    f"stream_deck.reset_thresholds.{service}.{window} must be 0-90"
+                )
+    colors = config.stream_deck.state_colors
+    if not isinstance(colors, dict):
+        raise ControlConfigError("stream_deck.state_colors must be a mapping")
+    for state, color in colors.items():
+        if state not in SESSION_STATE_NAMES:
+            raise ControlConfigError(f"stream_deck.state_colors: unknown state {state}")
+        if not isinstance(color, str) or not _HEX_COLOR.match(color):
+            raise ControlConfigError(f"stream_deck.state_colors.{state} must be #rrggbb")
     serial = config.stream_deck.device_serial
     if serial is not None and (not isinstance(serial, str) or not serial.strip()):
         raise ControlConfigError("stream_deck.device_serial must be a non-empty string or null")
@@ -220,6 +288,10 @@ def validate_control_config(config: ControlConfig) -> None:
                 message = f"plugins.{message}"
             raise ControlConfigError(message) from exc
     for binding in config.buttons:
+        if binding.accent is not None and (
+            not isinstance(binding.accent, str) or not _HEX_COLOR.match(binding.accent)
+        ):
+            raise ControlConfigError(f"buttons[{binding.key_index}].accent must be #rrggbb")
         if not isinstance(binding.span, int) or isinstance(binding.span, bool) or binding.span < 1:
             raise ControlConfigError(
                 f"buttons[{binding.key_index}].span must be a positive integer"
@@ -228,6 +300,8 @@ def validate_control_config(config: ControlConfig) -> None:
             raise ControlConfigError(
                 f"buttons[{binding.key_index}].span > 1 requires a plugin"
             )
+        if binding.component == "quota" and binding.span != 1:
+            raise ControlConfigError(f"buttons[{binding.key_index}] quota keys use one key")
         if binding.key_index + binding.span > MK2_KEY_COUNT:
             raise ControlConfigError(
                 f"buttons[{binding.key_index}].span {binding.span} exceeds the 15-key layout"
@@ -248,7 +322,20 @@ def validate_control_config(config: ControlConfig) -> None:
             raise ControlConfigError(
                 f"buttons[{binding.key_index}] must define component when plugin is set"
             )
-        if binding.action_params and binding.action is None:
+        if binding.component == "quota" and binding.action is None:
+            # Display-only quota keys may carry their display options here.
+            unknown = sorted(set(binding.action_params) - QUOTA_DISPLAY_PARAMS)
+            if unknown:
+                raise ControlConfigError(
+                    f"buttons[{binding.key_index}] quota keys accept only "
+                    f"{', '.join(sorted(QUOTA_DISPLAY_PARAMS))}, not {', '.join(unknown)}"
+                )
+            for name, value in binding.action_params.items():
+                if not isinstance(value, str):
+                    raise ControlConfigError(
+                        f"buttons[{binding.key_index}].action_params.{name} must be text"
+                    )
+        elif binding.action_params and binding.action is None:
             raise ControlConfigError(
                 f"buttons[{binding.key_index}] action_params require an action"
             )
@@ -301,7 +388,9 @@ def parse_control_config(data: dict[str, Any]) -> ControlConfig:
         schema_version=data.get("schema_version", 0),
         bridge=_construct(BridgeSettings, _mapping(data.get("bridge", {}), "bridge"), "bridge"),
         stream_deck=_construct(
-            Mk2Settings, _mapping(data.get("stream_deck", {}), "stream_deck"), "stream_deck"
+            Mk2Settings,
+            _mapping(data.get("stream_deck", {}), "stream_deck"),
+            "stream_deck",
         ),
         plugins=_mapping(data.get("plugins", {}), "plugins"),
         buttons=_migrate_legacy_session_row(_parse_buttons(data.get("buttons", []))),
@@ -325,8 +414,15 @@ def write_control_config(path: Path | str, config: ControlConfig) -> None:
     validate_control_config(config)
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = config_path.with_suffix(f"{config_path.suffix}.tmp")
-    temporary.write_text(
-        yaml.safe_dump(control_config_data(config), sort_keys=False), encoding="utf-8"
+    # A unique temporary name, so two writers never share one file.
+    fd, name = tempfile.mkstemp(
+        prefix=f".{config_path.name}.", suffix=".tmp", dir=config_path.parent
     )
-    temporary.replace(config_path)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(yaml.safe_dump(control_config_data(config), sort_keys=False))
+        temporary.replace(config_path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise

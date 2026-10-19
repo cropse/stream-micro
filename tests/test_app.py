@@ -61,6 +61,7 @@ def use_named_images(monkeypatch) -> None:
         lambda quota, label, _config, _size: f"{label}:{quota.percent_used:g}",
     )
     monkeypatch.setattr(app, "render_error_key", lambda *_args: "ERROR")
+    monkeypatch.setattr(app, "render_blank_key", lambda *_args: "BLANK")
 
 
 def test_run_once_success_updates_configured_keys_without_sleep(
@@ -170,3 +171,16 @@ def test_keyboard_interrupt_during_fetch_closes_output(monkeypatch, tmp_path: Pa
 
     assert output.exited == 1
     assert output.exit_exception is KeyboardInterrupt
+
+
+def test_monthly_credit_plan_shows_on_the_first_key(monkeypatch, tmp_path: Path) -> None:
+    config = config_for(tmp_path, session_key_index=3, weekly_key_index=5)
+    output = FakeOutput()
+    output_sequence(monkeypatch, [output])
+    use_named_images(monkeypatch)
+    monthly = QuotaSnapshot(monthly=QuotaWindow(WindowKind.MONTHLY, 11))
+    monkeypatch.setattr(app, "fetch_quota", lambda _config: monthly)
+
+    app.run(config, once=True, sleep=lambda _seconds: None)
+
+    assert output.writes == [(3, "MONTH:11"), (5, "BLANK")]

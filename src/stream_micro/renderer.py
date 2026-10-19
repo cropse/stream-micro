@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 from datetime import datetime
 from functools import lru_cache
@@ -20,7 +21,7 @@ def status_color(percent: float, config: DisplayConfig) -> str:
     return config.healthy_color
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=32)
 def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
     """Load a font that can render CJK key labels before generic fallbacks.
 
@@ -48,9 +49,15 @@ def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont | ImageFont.F
     ]
     for candidate in cjk_candidates:
         try:
-            return ImageFont.truetype(str(candidate), size)
+            font = ImageFont.truetype(str(candidate), size)
         except OSError:
             continue
+        if candidate.name.endswith("-VF.ttf"):
+            # Variable Noto fonts default to their Thin (100) instance, which
+            # made even "bold" labels hard to read on the Deck.
+            with contextlib.suppress(OSError, ValueError):
+                font.set_variation_by_axes([800 if bold else 500])
+        return font
 
     fallback_names = (
         ("arialbd.ttf", "DejaVuSans-Bold.ttf")
@@ -117,6 +124,10 @@ def render_quota_key(
     )
     draw.text(reset_position, reset, font=reset_font, fill=config.text_color)
     return image
+
+
+def render_blank_key(config: DisplayConfig, size: tuple[int, int]) -> Image.Image:
+    return Image.new("RGB", size, config.background_color)
 
 
 def render_error_key(message: str, config: DisplayConfig, size: tuple[int, int]) -> Image.Image:
