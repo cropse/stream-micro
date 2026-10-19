@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
+import { locale, t, tDetail } from "./i18n";
 
 type Button = {
   key_index: number;
@@ -23,7 +24,7 @@ type OllamaQuotaConfig = {
   refresh_interval_seconds?: number;
 };
 type CodexConfig = { enabled?: boolean; codex_path?: string | null; codex_home?: string | null };
-type ClaudeCodeConfig = { enabled?: boolean; claude_path?: string | null; claude_home?: string | null; plugin_dir?: string | null; max_sessions?: number };
+type ClaudeCodeConfig = { enabled?: boolean; claude_path?: string | null; claude_home?: string | null; plugin_dir?: string | null; max_sessions?: number};
 type UsageWindow = {
   label?: string;
   used_percent?: string;
@@ -56,6 +57,19 @@ type Config = {
   buttons: Button[];
 };
 type Session = { id: string; title: string; state: string; project: string | null; directory?: string | null };
+type SetupState = "missing" | "other" | "wrong_port" | "partial" | "ours";
+type ClaudeSetup = {
+  settings_path: string;
+  error?: string;
+  hooks?: { state: SetupState; events: string[] };
+  statusline?: { state: SetupState; chained: boolean };
+  hook_command?: string;
+  statusline_command?: string;
+  last_hook_at?: number | null;
+  last_statusline_at?: number | null;
+  port: number;
+  backup?: string | null;
+};
 type PluginManifest = { id: string; name: string; components: string[]; actions: string[] };
 type PluginHealth = { connected: boolean; detail: string; endpoint?: string | null };
 type QuotaSignals = Record<string, string | number | boolean | null>;
@@ -121,7 +135,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 function displayName(value: string | null | undefined) {
-  return value ? value.replace(/_/g, " ").replace(/\b\w/g, (letter: string) => letter.toUpperCase()) : "Not configured";
+  return value ? t(value.replace(/_/g, " ").replace(/\b\w/g, (letter: string) => letter.toUpperCase())) : t("Not configured");
 }
 
 // Same colours as the physical keys: bright = needs a look, dark green = quiet.
@@ -140,19 +154,9 @@ function sessionStateColor(state: string) {
   return SESSION_STATE_COLORS[state] ?? "#71819a";
 }
 
-// The words the physical keys show (control_renderer._SHORT_STATE).
-const SESSION_STATE_WORDS: Record<string, string> = {
-  idle: "IDLE",
-  running: "RUN",
-  background: "SUB",
-  waiting: "WAIT",
-  completed: "DONE",
-  error: "ERR",
-  disconnected: "OFF",
-};
-
-function sessionStateWord(state: string) {
-  return SESSION_STATE_WORDS[state] ?? state.toUpperCase();
+// Session state words: the same as on the keys (RUN, SUB, WAIT, ...).
+function stateText(state: string) {
+  return STATE_WORDS[state] ?? state.toUpperCase();
 }
 
 // Dark text on a light colour, light text on a dark one (as on the keys).
@@ -168,7 +172,7 @@ function sessionStateChip(state: string, custom?: Record<string, string>) {
   return { background: sessionStateColor(state), color: DARK_SESSION_STATES.has(state) ? "#dcfce7" : "#08131f" };
 }
 
-// Each provider's key look (control_renderer._PROVIDER_STYLES): accent and background.
+// The accent each provider draws on its keys (control_renderer._PROVIDER_STYLES).
 const PROVIDER_ACCENTS: Record<string, string> = {
   claude_code: "#e28b67",
   codex: "#48e0b4",
@@ -176,15 +180,6 @@ const PROVIDER_ACCENTS: Record<string, string> = {
   ollama_quota: "#b69cff",
   http_quota: "#f2b880",
 };
-const PROVIDER_BACKGROUNDS: Record<string, string> = {
-  claude_code: "#251811",
-  codex: "#0b1f1c",
-  opencode: "#142038",
-  ollama_quota: "#181a2b",
-  http_quota: "#14181f",
-};
-const SESSION_STATE_ORDER = ["running", "background", "waiting", "completed", "idle", "error", "disconnected"];
-// Swatches that read well on the dark keys.
 const COLOR_SWATCHES = ["#4a9eff", "#8aa7ff", "#b794ff", "#48e0b4", "#4de57a", "#166534", "#ffc15a", "#f2b880", "#e28b67", "#ff7983", "#ffffff", "#8292aa"];
 
 function ColorPicker({ value, isDefault, onPick, onReset, label }: {
@@ -197,17 +192,34 @@ function ColorPicker({ value, isDefault, onPick, onReset, label }: {
   const current = value.toLowerCase();
   return <div className="color-picker" role="group" aria-label={label}>
     {COLOR_SWATCHES.map((color) => <button key={color} type="button" className={`swatch${current === color ? " is-on" : ""}`} style={{ background: color }} aria-label={color} aria-pressed={current === color} onClick={() => onPick(color)} />)}
-    <label className="swatch swatch-custom" title="Custom colour">
-      <input type="color" value={value} aria-label="Custom colour" onChange={(event) => onPick(event.target.value)} />
+    <label className="swatch swatch-custom" title={t("Custom colour")}>
+      <input type="color" value={value} aria-label={t("Custom colour")} onChange={(event) => onPick(event.target.value)} />
     </label>
-    {!isDefault && <button type="button" className="link-button" onClick={onReset}>Reset to default colour</button>}
+    {!isDefault && <button type="button" className="link-button" onClick={onReset}>{t("Reset to default colour")}</button>}
   </div>;
 }
+
+// Each provider's key background (control_renderer._PROVIDER_STYLES).
+const PROVIDER_BACKGROUNDS: Record<string, string> = {
+  claude_code: "#251811",
+  codex: "#0b1f1c",
+  opencode: "#142038",
+  ollama_quota: "#181a2b",
+  http_quota: "#14181f",
+};
+
+const SESSION_STATE_ORDER = ["running", "background", "waiting", "completed", "idle", "error", "disconnected"];
+const STATE_WORDS: Record<string, string> = { idle: "IDLE", running: "RUN", background: "SUB", waiting: "WAIT", completed: "DONE", error: "ERR", disconnected: "OFF" };
 
 function formatReset(value: string | number | boolean | null | undefined) {
   if (!value || typeof value !== "string") return "—";
   const parsed = new Date(value);
-  return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString();
+  if (Number.isNaN(parsed.valueOf())) return value;
+  const when = parsed.toLocaleString(locale(), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const minutes = Math.round((parsed.valueOf() - Date.now()) / 60000);
+  if (minutes <= 0 || minutes >= 24 * 60) return when;
+  const hours = Math.floor(minutes / 60);
+  return hours ? t("{when} (in {h} h {m} min)", { when, h: hours, m: minutes % 60 }) : t("{when} (in {m} min)", { when, m: minutes });
 }
 
 // Providers report how much is *used*; colour always follows what is left.
@@ -221,7 +233,7 @@ function pctColor(usedPct: number | null | undefined) {
 function quotaShown(usedPct: number, display: QuotaDisplay) {
   const used = Math.min(Math.max(usedPct, 0), 100);
   const value = display === "used" ? used : 100 - used;
-  return { value, text: `${Math.round(value)}% ${display === "used" ? "used" : "left"}` };
+  return { value, text: t(display === "used" ? "{value}% used" : "{value}% left", { value: Math.round(value) }) };
 }
 
 const STALE_COLOR = "#6f8099";
@@ -230,17 +242,6 @@ const STALE_COLOR = "#6f8099";
 const SHORT_WINDOW_LABELS: Record<string, string> = { WEEK: "7D", WEEKLY: "7D", WK: "7D", MONTH: "MO", MONTHLY: "MO" };
 function shortLabel(label: string) {
   return SHORT_WINDOW_LABELS[label.toUpperCase()] ?? label;
-}
-
-// Balances show money left (control_renderer._money_text uses the same signs).
-const CURRENCY_SIGNS: Record<string, string> = { CNY: "¥", USD: "$", EUR: "€", JPY: "¥" };
-function moneyText(amount: unknown, currency: unknown) {
-  if (typeof amount !== "number" || !Number.isFinite(amount)) return null;
-  const code = typeof currency === "string" ? currency : "";
-  const text = Math.abs(amount).toFixed(2);
-  // A debt reads -$1.23; anything that rounds to zero is just $0.00.
-  const minus = amount < 0 && Number(text) !== 0 ? "-" : "";
-  return `${minus}${CURRENCY_SIGNS[code] ?? (code ? `${code} ` : "")}${text}`;
 }
 
 function UsageBars({ signals, generic = false, display = "remaining" }: {
@@ -255,21 +256,89 @@ function UsageBars({ signals, generic = false, display = "remaining" }: {
   // Last-seen numbers from an unreachable source are grey, never green.
   const stale = Boolean(signals.stale);
   const tint = (used: number | null | undefined) => stale ? STALE_COLOR : pctColor(used);
-  const primaryLabel = generic ? shortLabel(String(signals.primary_label ?? "Primary")) : "Session";
-  const secondaryLabel = generic ? shortLabel(String(signals.secondary_label ?? "Secondary")) : "Weekly";
+  const primaryLabel = generic ? shortLabel(String(signals.primary_label ?? t("Primary"))) : t("Session");
+  const secondaryLabel = generic ? shortLabel(String(signals.secondary_label ?? t("Secondary"))) : t("Weekly");
+  const rows = [
+    { key: "primary", label: primaryLabel, used: primary, reset: primaryReset },
+    { key: "secondary", label: secondaryLabel, used: secondary, reset: secondaryReset },
+  ].filter((row): row is typeof row & { used: number } => typeof row.used === "number");
   return <div className={`ollama-usage-grid${stale ? " is-stale" : ""}`}>
-    {stale && <small className="stale-note">Last seen{typeof signals.seen_at === "string" ? ` ${formatReset(signals.seen_at)}` : ""} — the source is not reachable now.</small>}
-    <div className="usage-bar">
-      <div className="usage-bar-label"><span>{primaryLabel}</span><b style={{ color: tint(primary) }}>{moneyText(signals.primary_amount_left, signals.primary_currency) ?? (primary != null ? quotaShown(primary, display).text : "—")}</b></div>
-      <div className="usage-bar-track"><div className="usage-bar-fill" style={{ width: `${primary != null ? quotaShown(primary, display).value : 0}%`, background: tint(primary) }} /></div>
-      <small>Resets: {formatReset(primaryReset)}</small>
-    </div>
-    <div className="usage-bar">
-      <div className="usage-bar-label"><span>{secondaryLabel}</span><b style={{ color: tint(secondary) }}>{moneyText(signals.secondary_amount_left, signals.secondary_currency) ?? (secondary != null ? quotaShown(secondary, display).text : "—")}</b></div>
-      <div className="usage-bar-track"><div className="usage-bar-fill" style={{ width: `${secondary != null ? quotaShown(secondary, display).value : 0}%`, background: tint(secondary) }} /></div>
-      <small>Resets: {formatReset(secondaryReset)}</small>
+    {stale && <small className="stale-note">{typeof signals.seen_at === "string" ? t("Last seen {time} — the source is not reachable now.", { time: formatReset(signals.seen_at) }) : t("Last seen — the source is not reachable now.")}</small>}
+    {rows.length === 0 && <small className="usage-empty">{t("No quota numbers yet.")}</small>}
+    {rows.map((row) => <div key={row.key} className="usage-bar">
+      <div className="usage-bar-label"><span>{row.label}</span><b style={{ color: tint(row.used) }}>{moneyText(signals[`${row.key}_amount_left`], signals[`${row.key}_currency`]) ?? quotaShown(row.used, display).text}</b></div>
+      <div className="usage-bar-track"><div className="usage-bar-fill" style={{ width: `${quotaShown(row.used, display).value}%`, background: tint(row.used) }} /></div>
+      {typeof row.reset === "string" && row.reset ? <small>{t("Resets:")} {formatReset(row.reset)}</small> : null}
+    </div>)}
+  </div>;
+}
+
+// What the user can do about a provider problem, when we know.
+const FIX_HINTS: [RegExp, string][] = [
+  [/No cookie value configured/, "Paste the cookie above, then Save."],
+  [/cookie is expired or invalid/, "Sign in at ollama.com again and paste a new cookie (see How to get the cookie)."],
+  [/Claude Code was not found/, "Install Claude Code, or set its executable under Advanced settings."],
+  [/^key rejected$/, "Paste the key again; it may have been revoked."],
+  [/^needs a key$/, "Paste the API key above, then Save."],
+  [/no quota numbers at the configured paths/, "Check the paths under Advanced settings against the service's reply."],
+  [/window \d+ needs used_percent/, "Open that source under Configuration and fill in where its number is."],
+  [/needs one or two windows/, "Open that source under Configuration and add a row with where its number is."],
+];
+
+function fixHint(detail: string | null | undefined) {
+  const found = detail ? FIX_HINTS.find(([pattern]) => pattern.test(detail)) : undefined;
+  return found ? t(found[1]) : null;
+}
+
+function Health({ health }: { health?: PluginHealth }) {
+  if (!health) return null;
+  const hint = health.connected ? null : fixHint(health.detail);
+  return <div className={`ollama-health ${health.connected ? "is-connected" : "is-error"}`}>
+    <span className="health-dot" />
+    <span>{tDetail(health.detail)}{hint && <small className="fix-hint">{hint}</small>}</span>
+  </div>;
+}
+
+// Disabled providers fold down to their title and switch.
+function cardClass(base: string, enabled: boolean | undefined) {
+  return `${base}${enabled ? "" : " is-off"}`;
+}
+
+type Billing = "monthly" | "payg";
+
+function BillingBadge({ billing }: { billing: Billing }) {
+  return <span className={`billing-badge billing-${billing}`}>{billing === "monthly" ? t("Monthly plan") : t("Pay as you go")}</span>;
+}
+
+// Heading of a quota card: what it is, how it is billed, and how to take it away.
+// Turning a service off or removing it goes through its row in the list,
+// which asks first and offers Undo until Save.
+function QuotaCardHead({ kicker, title, billing }: {
+  kicker: string;
+  title: string;
+  billing: Billing;
+}) {
+  return <div className="quota-card-head">
+    <div><p>{kicker}</p><h2>{title}</h2></div>
+    <div className="quota-card-tools">
+      <BillingBadge billing={billing} />
     </div>
   </div>;
+}
+
+// Quota of a subscription whose Agent card lives under "Agent chats" (Claude, Codex).
+function PlanQuotaCard({ kicker, title, snapshot, display, note }: {
+  kicker: string;
+  title: string;
+  snapshot?: PluginSnapshot;
+  display: QuotaDisplay;
+  note: string;
+}) {
+  return <section className="panel provider-card quota-card">
+    <QuotaCardHead kicker={kicker} title={title} billing="monthly" />
+    {snapshot?.signals ? <UsageBars signals={snapshot.signals} generic display={display} /> : <small className="usage-empty">{t("No quota numbers yet.")}</small>}
+    <p className="ollama-hint">{note}</p>
+  </section>;
 }
 
 function OllamaQuotaCard({ config, snapshot, updateConfig }: {
@@ -278,6 +347,7 @@ function OllamaQuotaCard({ config, snapshot, updateConfig }: {
   updateConfig: (change: (current: Config) => Config) => void;
 }) {
   const pluginConfig = config?.plugins?.ollama_quota as OllamaQuotaConfig | undefined;
+  const hasKeySource = ((config?.plugins?.http_quota as HttpQuotaConfig | undefined)?.sources ?? []).some((source) => source.preset === "ollama");
   const health = snapshot?.health;
   const signals = snapshot?.signals;
 
@@ -291,22 +361,22 @@ function OllamaQuotaCard({ config, snapshot, updateConfig }: {
     }));
   };
 
-  return <section className="panel ollama-card">
-    <p>OLLAMA USAGE</p>
-    <h2>Quota</h2>
-    <label className="toggle-field ollama-toggle"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setField("enabled", event.target.checked)} /> Enable Ollama Cloud quota provider</label>
+  return <section className="panel ollama-card quota-card">
+    <QuotaCardHead kicker={t("OLLAMA · SESSION COOKIE")} title="Ollama Cloud" billing="monthly" />
+    {hasKeySource && <p className="fix-note">{t("An Ollama source with an API key is set up below; this cookie card can be turned off.")} <button type="button" className="link-button" onClick={() => setField("enabled", false)}>{t("Turn off")}</button></p>}
     <div className="ollama-cookie-field">
-      <label>Session cookie value
+      <label>{t("Session cookie value")}
         <input
           type="password"
-          placeholder={pluginConfig?.cookie_configured ? "Cookie configured — enter a new value to replace it" : "Paste ollama.com __Secure-session cookie value"}
+          placeholder={pluginConfig?.cookie_configured ? t("Cookie configured — enter a new value to replace it") : t("Paste ollama.com __Secure-session cookie value")}
           value={pluginConfig?.cookie_value ?? ""}
           onChange={(event) => setField("cookie_value", event.target.value)}
         />
       </label>
-      <p className="ollama-hint">{pluginConfig?.cookie_configured ? "The saved cookie stays in the local Bridge and is never returned to this page." : <>Sign in at ollama.com, open DevTools → Application → Cookies, copy the <code>__Secure-session</code> value.</>}</p>
+      <p className="ollama-hint">{pluginConfig?.cookie_configured ? t("The saved cookie stays in the local Bridge and is never returned to this page.") : <>Sign in at ollama.com, open DevTools → Application → Cookies, copy the <code>__Secure-session</code> value.</>}</p>
       <details className="ollama-advanced">
-        <summary>How to get the cookie</summary>
+        <summary>{t("How to get the cookie")}</summary>
+        {<>
         <ol className="cookie-steps">
           <li>Sign in at <code>ollama.com</code> in Chrome or Edge with the account to show.</li>
           <li>Press <code>F12</code> to open DevTools and choose the <b>Application</b> tab (in Firefox: <b>Storage</b>).</li>
@@ -314,29 +384,25 @@ function OllamaQuotaCard({ config, snapshot, updateConfig }: {
           <li>Find <code>__Secure-session</code> and copy its <b>Value</b>; paste it above and Save.</li>
           <li>The <b>Expires / Max-Age</b> column there shows until when it works. Signing out of ollama.com ends it early; when it stops working this card says so, and you paste a new one.</li>
         </ol>
+        </>}
       </details>
     </div>
     <details className="ollama-advanced">
-      <summary>Advanced settings</summary>
-      <label>Settings URL
+      <summary>{t("Advanced settings")}</summary>
+      <label>{t("Settings URL")}
         <input type="text" value={pluginConfig?.settings_url ?? "https://ollama.com/settings"} onChange={(event) => setField("settings_url", event.target.value)} />
       </label>
-      <label>Cookie name
+      <label>{t("Cookie name")}
         <input type="text" value={pluginConfig?.cookie_name ?? "__Secure-session"} onChange={(event) => setField("cookie_name", event.target.value)} />
       </label>
-      <label>Request timeout (seconds)
+      <label>{t("Request timeout (seconds)")}
         <input type="number" min={1} value={pluginConfig?.request_timeout_seconds ?? 15} onChange={(event) => setField("request_timeout_seconds", Number(event.target.value))} />
       </label>
-      <label>Refresh interval (seconds)
+      <label>{t("Refresh interval (seconds)")}
         <input type="number" min={1} value={pluginConfig?.refresh_interval_seconds ?? 60} onChange={(event) => setField("refresh_interval_seconds", Number(event.target.value))} />
       </label>
     </details>
-    {health && (
-      <div className={`ollama-health ${health.connected ? "is-connected" : "is-error"}`}>
-        <span className="health-dot" />
-        <span>{health.detail}</span>
-      </div>
-    )}
+    <Health health={health} />
     {signals && <UsageBars signals={signals} generic={typeof signals.primary_percent === "number"} display={config?.stream_deck.quota_display ?? "remaining"} />}
   </section>;
 }
@@ -356,45 +422,246 @@ function CodexCard({ config, snapshot, updateConfig }: {
       },
     }));
   };
-  return <section className="panel ollama-card codex-card">
-    <p>CODEX APP SERVER</p>
-    <h2>Chats &amp; quota</h2>
-    <label className="toggle-field"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setField("enabled", event.target.checked)} /> Enable Codex provider</label>
+  return <section className={cardClass("panel ollama-card codex-card", pluginConfig?.enabled)}>
+    <p className="card-keep">{t("CODEX APP SERVER")}</p>
+    <h2 className="card-keep">{t("Chats")}</h2>
+    <label className="card-keep toggle-field"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setField("enabled", event.target.checked)} /> {t("Enable Codex provider")}</label>
+    {!pluginConfig?.enabled && <p className="card-keep off-note">{t("Off. Turn it on to set it up; changes apply after Save.")}</p>}
     <details className="ollama-advanced">
-      <summary>Advanced settings</summary>
-      <label>Codex executable
-        <input type="text" placeholder="codex (use PATH)" value={pluginConfig?.codex_path ?? ""} onChange={(event) => setField("codex_path", event.target.value || null)} />
+      <summary>{t("Advanced settings")}</summary>
+      <label>{t("Codex executable")}
+        <input type="text" placeholder={t("codex (use PATH)")} value={pluginConfig?.codex_path ?? ""} onChange={(event) => setField("codex_path", event.target.value || null)} />
       </label>
       <label>CODEX_HOME
-        <input type="text" placeholder="Use current Codex home" value={pluginConfig?.codex_home ?? ""} onChange={(event) => setField("codex_home", event.target.value || null)} />
+        <input type="text" placeholder={t("Use current Codex home")} value={pluginConfig?.codex_home ?? ""} onChange={(event) => setField("codex_home", event.target.value || null)} />
       </label>
     </details>
-    {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
-    <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>recent Codex chats available to session keys</span></div>
-    {snapshot?.signals && <UsageBars signals={snapshot.signals} generic display={config?.stream_deck.quota_display ?? "remaining"} />}
+    <Health health={snapshot?.health} />
+    <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>{t("recent Codex chats available to session keys")}</span></div>
   </section>;
 }
 
-type SetupState = "missing" | "other" | "wrong_port" | "partial" | "ours";
-type ClaudeSetup = {
-  settings_path: string;
-  error?: string;
-  hooks?: { state: SetupState; events: string[] };
-  statusline?: { state: SetupState; chained: boolean };
-  hook_command?: string;
-  statusline_command?: string;
-  last_hook_at?: number | null;
-  last_statusline_at?: number | null;
-  port: number;
+function ClaudeCodeCard({ config, snapshot, updateConfig }: {
+  config: Config | null;
+  snapshot?: PluginSnapshot;
+  updateConfig: (change: (current: Config) => Config) => void;
+}) {
+  const pluginConfig = config?.plugins?.claude_code as ClaudeCodeConfig | undefined;
+  const setField = (field: keyof ClaudeCodeConfig, value: string | number | boolean | null) => {
+    updateConfig((current) => ({
+      ...current,
+      plugins: {
+        ...current.plugins,
+        claude_code: { ...current.plugins.claude_code, [field]: value },
+      },
+    }));
+  };
+  return <section className={cardClass("panel provider-card claude-code-card", pluginConfig?.enabled)}>
+    <p className="card-keep">{t("CLAUDE CODE")}</p>
+    <h2 className="card-keep">{t("Sessions")}</h2>
+    <label className="card-keep toggle-field claude-code-toggle"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setField("enabled", event.target.checked)} /> {t("Enable Claude Code provider")}</label>
+    {!pluginConfig?.enabled && <p className="card-keep off-note">{t("Off. Turn it on to set it up; changes apply after Save.")}</p>}
+    <details className="ollama-advanced">
+      <summary>{t("Advanced settings")}</summary>
+      <label>{t("Claude executable")}
+        <input type="text" placeholder={t("claude (use PATH)")} value={pluginConfig?.claude_path ?? ""} onChange={(event) => setField("claude_path", event.target.value || null)} />
+      </label>
+      <label>{t("Claude data folder")}
+        <input type="text" placeholder={t("Use current ~/.claude folder")} value={pluginConfig?.claude_home ?? ""} onChange={(event) => setField("claude_home", event.target.value || null)} />
+      </label>
+      <label>{t("Companion plugin folder")}
+        <input type="text" placeholder={t("Optional path to the bundled integration")} value={pluginConfig?.plugin_dir ?? ""} onChange={(event) => setField("plugin_dir", event.target.value || null)} />
+      </label>
+      <label>{t("Recent Sessions")}
+        <input type="number" min={1} max={15} value={pluginConfig?.max_sessions ?? 15} onChange={(event) => setField("max_sessions", Number(event.target.value))} />
+      </label>
+    </details>
+    <Health health={snapshot?.health} />
+    <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>{t("recent Claude Code Sessions available to button zones")}</span></div>
+    <p className="provider-note">{t("Session state comes from the running Claude process and its transcript, so it works without setup; the companion hook (installed above) adds an exact WAIT when Claude needs your approval. SUB means the turn ended but subagents or other agents still work for it. Quota appears after Claude Code's status line receives its first API response.")}</p>
+  </section>;
+}
+
+// Known usage APIs; the Bridge fills in URL and fields for these (http_quota PRESETS).
+// `base` names a new source; `billing` picks its section on the Configuration page.
+const USAGE_PRESETS: { id: string; name: string; hint: string; base: string; billing: Billing }[] = [
+  { id: "deepseek", name: "DeepSeek balance", hint: "A DeepSeek API key (platform.deepseek.com → API keys). Reading the balance costs nothing.", base: "deepseek", billing: "payg" },
+  { id: "moonshot", name: "Moonshot balance (international)", hint: "An API key from platform.moonshot.ai (USD account). Reading the balance costs nothing.", base: "moonshot", billing: "payg" },
+  { id: "moonshot_cn", name: "Moonshot balance (China)", hint: "An API key from platform.moonshot.cn (CNY account). Reading the balance costs nothing.", base: "moonshot-cn", billing: "payg" },
+  { id: "siliconflow", name: "SiliconFlow balance (China)", hint: "An API key from cloud.siliconflow.cn (CNY account). Reading the balance costs nothing.", base: "siliconflow", billing: "payg" },
+  { id: "siliconflow_intl", name: "SiliconFlow balance (international)", hint: "An API key from cloud.siliconflow.com (USD account). Reading the balance costs nothing.", base: "siliconflow-intl", billing: "payg" },
+  { id: "novita", name: "Novita balance", hint: "An API key from novita.ai (Key Management). Reading the balance costs nothing.", base: "novita", billing: "payg" },
+  { id: "ollama", name: "Ollama Cloud credits", hint: "An ollama.com API key (Settings → Keys). Reading the balance uses no credits; no cookie needed.", base: "ollama", billing: "monthly" },
+  { id: "openrouter", name: "OpenRouter key limit", hint: "Any OpenRouter API key that has a spending limit.", base: "openrouter", billing: "payg" },
+  { id: "openrouter_credits", name: "OpenRouter credits", hint: "Account credits; OpenRouter may require a management key.", base: "openrouter-credits", billing: "payg" },
+  { id: "custom", name: "Custom JSON API", hint: "Any HTTPS endpoint that returns usage as JSON.", base: "custom", billing: "payg" },
+];
+
+const AGENT_PLUGINS = new Set(["opencode", "codex", "claude_code"]);
+
+function usagePreset(id: string | null | undefined) {
+  return USAGE_PRESETS.find((item) => item.id === (id || "custom")) ?? USAGE_PRESETS[USAGE_PRESETS.length - 1];
+}
+const PATH_LABELS: Record<keyof UsageWindow, string> = {
+  label: "Label",
+  used_percent: "Used % path",
+  remaining_percent: "Remaining % path",
+  used: "Used amount path",
+  remaining: "Remaining amount path",
+  limit: "Limit path",
+  reset_at: "Reset time path",
+  fraction: "Fraction",
 };
-type SetupChange = { action: "install" | "remove"; parts: string[]; replace_statusline?: boolean; chain_statusline?: boolean };
+const WINDOW_MODES: { id: keyof UsageWindow; name: string; fields: (keyof UsageWindow)[] }[] = [
+  { id: "used_percent", name: "Used %", fields: ["used_percent"] },
+  { id: "remaining_percent", name: "Remaining %", fields: ["remaining_percent"] },
+  { id: "used", name: "Used / limit", fields: ["used", "limit"] },
+  { id: "remaining", name: "Remaining / limit", fields: ["remaining", "limit"] },
+];
+
+// A row the Bridge accepts: a percentage path, or an amount path with a limit.
+function rowHasNumber(window: UsageWindow) {
+  const filled = (value: unknown) => value !== undefined && value !== null && String(value).trim() !== "";
+  return filled(window.used_percent) || filled(window.remaining_percent) || (filled(window.limit) && (filled(window.used) || filled(window.remaining)));
+}
+
+function windowMode(window: UsageWindow): keyof UsageWindow {
+  if (window.remaining_percent !== undefined) return "remaining_percent";
+  if (window.used !== undefined) return "used";
+  if (window.remaining !== undefined) return "remaining";
+  return "used_percent";
+}
+
+// One card per usage-API source, for the sources billed as `billing`.
+function UsageSourceCards({ config, snapshot, updateConfig, billing, only, savedIds }: {
+  config: Config | null;
+  snapshot?: PluginSnapshot;
+  updateConfig: (change: (current: Config) => Config) => void;
+  billing?: Billing;
+  only?: string;
+  savedIds?: Set<string>;
+}) {
+  const pluginConfig = config?.plugins?.http_quota as HttpQuotaConfig | undefined;
+  const sources = pluginConfig?.sources ?? [];
+  const display = config?.stream_deck.quota_display ?? "remaining";
+  const setFields = (fields: Partial<HttpQuotaConfig>) => {
+    updateConfig((current) => ({
+      ...current,
+      plugins: { ...current.plugins, http_quota: { ...current.plugins.http_quota, ...fields } },
+    }));
+  };
+  const setSources = (next: UsageSource[]) => setFields({ sources: next });
+  const setSource = (index: number, fields: Partial<UsageSource>) => setSources(sources.map((source, at) => at === index ? { ...source, ...fields } : source));
+  const setWindows = (index: number, windows: UsageWindow[]) => setSource(index, { windows });
+  const setWindow = (index: number, at: number, fields: Partial<UsageWindow>) => {
+    const windows = [...(sources[index].windows ?? [])];
+    windows[at] = { ...windows[at], ...fields };
+    setWindows(index, windows);
+  };
+  // Switching what a row reads clears its path: the old one meant something else.
+  const setWindowMode = (index: number, at: number, mode: keyof UsageWindow) => {
+    const { used_percent: _used, remaining_percent: _left, used: _amount, remaining: _rest, limit, ...rest } = sources[index].windows?.[at] ?? {};
+    const next: UsageWindow = { ...rest, [mode]: "" };
+    if (mode === "used" || mode === "remaining") next.limit = limit ?? "";
+    const windows = [...(sources[index].windows ?? [])];
+    windows[at] = next;
+    setWindows(index, windows);
+  };
+  return <>
+    {sources.map((source, index) => {
+      const preset = usagePreset(source.preset);
+      if (only !== undefined ? source.id !== only : preset.billing !== billing) return null;
+      const custom = preset.id === "custom";
+      const windows = source.windows ?? [];
+      const account = snapshot?.accounts?.find((item) => item.id === source.id);
+      const advanced = <>
+        <label>URL
+          <input type="text" placeholder={custom ? "https://api.example.com/usage" : t("Preset default")} value={source.url ?? ""} onChange={(event) => setSource(index, { url: event.target.value || null })} />
+        </label>
+        <p className="ollama-hint">{t("Never put a key in the URL. Pointing a source at another host asks for its key again.")}</p>
+        <div className="usage-row">
+          <label>{t("Key header")}
+            <input type="text" placeholder="Authorization" value={source.auth_header ?? ""} onChange={(event) => setSource(index, { auth_header: event.target.value || null })} />
+          </label>
+          <label>{t("Key format")}
+            <select value={source.auth_scheme === "" ? "bare" : source.auth_scheme ? "bearer" : "default"} onChange={(event) => setSource(index, { auth_scheme: event.target.value === "bare" ? "" : event.target.value === "bearer" ? "Bearer" : null })}>
+              <option value="default">{custom ? t("Bearer <key> (default)") : t("Preset default")}</option>
+              <option value="bearer">Bearer &lt;key&gt;</option>
+              <option value="bare">{t("<key> only")}</option>
+            </select>
+          </label>
+        </div>
+        <label>{t("Key from environment variable")}
+          <input type="text" placeholder={t("Optional, e.g. OPENROUTER_API_KEY")} value={source.api_key_env ?? ""} onChange={(event) => setSource(index, { api_key_env: event.target.value || null })} />
+        </label>
+        <p className="ollama-hint">{<>{custom ? "Where the numbers are in the JSON reply" : "Rows replace the preset's rows when added"}: paths like <code>data.limit</code>, <code>items.0.used</code> or <code>limits[type=TOKENS,unit=3].percentage</code>. Reset times may be ISO text or epoch seconds/milliseconds.</>}</p>
+        {[0, 1].map((at) => {
+          const window = windows[at];
+          if (!window) {
+            return at === windows.length ? <button key={at} type="button" className="link-button" onClick={() => setWindow(index, at, { label: at === 0 ? "5H" : "WEEK", used_percent: "" })}>{at === 0 ? t("Add top row") : t("Add bottom row")}</button> : null;
+          }
+          const mode = windowMode(window);
+          const fields = WINDOW_MODES.find((item) => item.id === mode)?.fields ?? ["used_percent"];
+          return <fieldset key={at} className="usage-window">
+            <legend>{at === 0 ? t("Top row") : t("Bottom row")} · <button type="button" className="link-button" onClick={() => setWindows(index, windows.filter((_, other) => other !== at))}>{t("Remove")}</button></legend>
+            <div className="usage-row">
+              <label>{t("Label")}
+                <input type="text" maxLength={8} placeholder="5H" value={window.label ?? ""} onChange={(event) => setWindow(index, at, { label: event.target.value })} />
+              </label>
+              <label>{t("Numbers")}
+                <select value={mode} onChange={(event) => setWindowMode(index, at, event.target.value as keyof UsageWindow)}>
+                  {WINDOW_MODES.map((item) => <option key={item.id} value={item.id}>{t(item.name)}</option>)}
+                </select>
+              </label>
+            </div>
+            {fields.map((field) => <label key={field}>{t(PATH_LABELS[field])}
+              <input type="text" value={String(window[field] ?? "")} onChange={(event) => setWindow(index, at, { [field]: field === "limit" && /^\d+(\.\d+)?$/.test(event.target.value.trim()) ? Number(event.target.value) : event.target.value })} />
+            </label>)}
+            {(mode === "used_percent" || mode === "remaining_percent") && <label className="toggle-field"><input type="checkbox" checked={window.fraction ?? false} onChange={(event) => setWindow(index, at, { fraction: event.target.checked })} /> {t("Value is a fraction (0–1)")}</label>}
+            <label>{t("Reset time path")}
+              <input type="text" placeholder={t("Optional")} value={window.reset_at ?? ""} onChange={(event) => setWindow(index, at, { reset_at: event.target.value })} />
+            </label>
+          </fieldset>;
+        })}
+      </>;
+      return <section key={index} className="panel provider-card usage-source quota-card">
+        <QuotaCardHead kicker={t(preset.name).toUpperCase()} title={source.label || source.id || t("New source")} billing={preset.billing} />
+        {account && <small className={account.error ? "source-status is-error" : "source-status"}>{account.error ? `${tDetail(account.error)}${fixHint(account.error) ? ` — ${fixHint(account.error)}` : ""}` : account.signals?.stale ? t("Last seen, not current") : t("Current")}</small>}
+        {account?.signals && <UsageBars signals={account.signals} generic display={display} />}
+        <p className="ollama-hint source-label-field">{t("Then choose this source as the Account of a Usage API quota key in Buttons.")}</p>
+        <label className="source-label-field">{t("Label")}
+          <input type="text" maxLength={16} placeholder={t("Shown on the key")} value={source.label ?? ""} onChange={(event) => setSource(index, { label: event.target.value || null })} />
+        </label>
+        <label>{t("API key")}
+          <input
+            type="password"
+            placeholder={source.api_key_configured ? t("Key saved — enter a new value to replace it") : t("Paste the API key")}
+            value={source.api_key ?? ""}
+            onChange={(event) => setSource(index, { api_key: event.target.value })}
+          />
+        </label>
+        <p className="ollama-hint">{t(preset.hint)} {source.api_key_configured && <button type="button" className="link-button" onClick={() => setSource(index, { api_key: "", api_key_configured: false })}>{t("Forget saved key")}</button>}</p>
+        {custom && !windows.some(rowHasNumber) && <p className="fix-note">{t("Fill in where at least one number is in the reply (a row below); the Bridge cannot save this source without it.")}</p>}
+        {custom ? advanced : <details className="ollama-advanced"><summary>{t("Advanced settings")}</summary>{advanced}</details>}
+        <div className="usage-row usage-footer">
+          <label>{t("Source ID (the key's Account)")}
+            <input type="text" maxLength={32} value={source.id} readOnly={source.api_key_configured === true || savedIds?.has(source.id) === true} title={source.api_key_configured === true || savedIds?.has(source.id) ? t("Saved sources keep their ID; change the Label instead") : undefined} onChange={(event) => setSource(index, { id: event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "") })} />
+          </label>
+        </div>
+      </section>;
+    })}
+  </>;
+}
+
+// -- Claude Code setup check ------------------------------------------------------
 const HOOK_EVENT_NAMES = ["SessionStart", "UserPromptSubmit", "PermissionRequest", "Notification", "Stop", "StopFailure", "SessionEnd"];
 
 function sinceText(at: number | null | undefined) {
   if (!at) return "";
   const minutes = Math.max(0, Math.round((Date.now() / 1000 - at) / 60));
-  if (minutes < 1) return "just now";
-  return minutes < 60 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
+  if (minutes < 1) return t("just now");
+  if (minutes < 60) return t("{n} min ago", { n: minutes });
+  return t("{n} h ago", { n: Math.round(minutes / 60) });
 }
 
 // Parts someone chose not to install (kept in this browser): no more reminders.
@@ -411,73 +678,77 @@ function writeSkipped(parts: string[]) {
   try { localStorage.setItem(SETUP_SKIP_KEY, JSON.stringify(parts)); } catch { /* private window */ }
 }
 
-// Whether the quota status line and the WAIT hook are installed and reaching
-// this Bridge; one click installs, fixes or removes them.
-function ClaudeSetupCheck({ setup, onChange }: { setup: ClaudeSetup | null; onChange: (body: SetupChange) => Promise<string | null> }) {
+// Something to fix: a part neither installed (even if not reporting yet) nor declined.
+function setupNeedsWork(setup: ClaudeSetup | null, skipped: string[]) {
+  if (!setup) return false;
+  if (setup.error) return true;
+  return (["statusline", "hooks"] as const).some((part) => !skipped.includes(part) && (setup[part]?.state ?? "missing") !== "ours");
+}
+
+function ClaudeSetupCheck({ setup, onChange, skipped, onSkip }: {
+  setup: ClaudeSetup | null;
+  onChange: (body: { action: "install" | "remove"; parts: string[]; replace_statusline?: boolean; chain_statusline?: boolean }) => Promise<string | null>;
+  skipped: string[];
+  onSkip: (part: string, skip: boolean) => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
-  const [skipped, setSkipped] = useState<string[]>(readSkipped);
   if (!setup) return null;
-  if (setup.error) return <div className="setup-check"><p className="fix-note">{setup.error}</p></div>;
-  const skip = (part: string, on: boolean) => {
-    const next = on ? [...new Set([...skipped, part])] : skipped.filter((item) => item !== part);
-    writeSkipped(next);
-    setSkipped(next);
-  };
-  const run = async (body: SetupChange) => {
+  if (setup.error) return <div className="setup-check"><p className="fix-note">{tDetail(setup.error)}</p></div>;
+  const run = async (body: Parameters<typeof onChange>[0]) => {
     setBusy(true);
     setConfirmRemove(null);
     const error = await onChange(body);
     setBusy(false);
-    setMessage(error ? { ok: false, text: error } : { ok: true, text: body.action === "install" ? `Written to ${setup.settings_path} (the old file is backed up). Start a new Claude Code session for it to take effect.` : `Removed from ${setup.settings_path}.` });
+    setMessage(error ? { ok: false, text: error } : { ok: true, text: body.action === "install" ? t("Written to {path} (the old file is backed up). Start a new Claude Code session for it to take effect.", { path: setup.settings_path }) : t("Removed from {path}.", { path: setup.settings_path }) });
   };
   const line = (part: "statusline" | "hooks") => {
     const state = (part === "statusline" ? setup.statusline?.state : setup.hooks?.state) ?? "missing";
     const last = part === "statusline" ? setup.last_statusline_at : setup.last_hook_at;
-    const title = part === "statusline" ? "Quota report (status line)" : "Approval reminder WAIT (hook)";
-    const purpose = part === "statusline" ? "Lets Claude's 5-hour and weekly quota show on the Deck." : "Lets Session keys show WAIT while Claude waits for your approval.";
+    const title = part === "statusline" ? t("Quota report (status line)") : t("Approval reminder WAIT (hook)");
+    const purpose = part === "statusline" ? t("Lets Claude's 5-hour and weekly quota show on the Deck.") : t("Lets Session keys show WAIT while Claude waits for your approval.");
+    let icon = "⬜";
+    let text = t("Not installed");
+    let actions: React.ReactNode = <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part] })}>{t("Install")}</button>;
+    if (state === "other") {
+      icon = "⚠️";
+      text = t("Claude Code already uses another status line.");
+      actions = <>
+        <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part], chain_statusline: true })}>{t("Keep it and add quota (recommended)")}</button>
+        <button type="button" className="small" disabled={busy} onClick={() => void run({ action: "install", parts: [part], replace_statusline: true })}>{t("Replace it")}</button>
+      </>;
+    } else if (state === "wrong_port") {
+      icon = "⛔";
+      text = t("Set to another port; this Bridge listens on {port}.", { port: setup.port });
+      actions = <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part] })}>{t("Fix it")}</button>;
+    } else if (state === "partial") {
+      icon = "⚠️";
+      text = t("Only part of it is installed.");
+      actions = <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part] })}>{t("Fix it")}</button>;
+    } else if (state === "ours") {
+      icon = last ? "✅" : "⏳";
+      text = last ? t("Working, last report {when}", { when: sinceText(last) }) : t("Installed. Waiting for the first report: start a new Claude Code session.");
+      if (part === "statusline" && setup.statusline?.chained) text += ` ${t("(after your own status line)")}`;
+      actions = null;
+    }
     const installed = state === "ours" || state === "wrong_port" || state === "partial";
     if (!installed && skipped.includes(part)) {
       return <li className="setup-line setup-skipped">
         <span className="setup-icon" aria-hidden="true">➖</span>
-        <div className="setup-text"><b>{title}</b><span>Not wanted; no reminders.</span><small>{purpose}</small></div>
-        <div className="setup-actions"><button type="button" className="link-button" onClick={() => skip(part, false)}>I want it after all</button></div>
+        <div className="setup-text"><b>{title}</b><span>{t("Not wanted; no reminders.")}</span><small>{purpose}</small></div>
+        <div className="setup-actions"><button type="button" className="link-button" onClick={() => onSkip(part, false)}>{t("I want it after all")}</button></div>
       </li>;
-    }
-    let icon = "⬜";
-    let text = "Not installed";
-    let actions: React.ReactNode = <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part] })}>Install</button>;
-    if (state === "other") {
-      icon = "⚠️";
-      text = "Claude Code already uses another status line.";
-      actions = <>
-        <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part], chain_statusline: true })}>Keep it and add quota (recommended)</button>
-        <button type="button" className="small" disabled={busy} onClick={() => void run({ action: "install", parts: [part], replace_statusline: true })}>Replace it</button>
-      </>;
-    } else if (state === "wrong_port") {
-      icon = "⛔";
-      text = `Set to another port; this Bridge listens on ${setup.port}.`;
-      actions = <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part] })}>Fix it</button>;
-    } else if (state === "partial") {
-      icon = "⚠️";
-      text = "Only part of it is installed.";
-      actions = <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part] })}>Fix it</button>;
-    } else if (state === "ours") {
-      icon = last ? "✅" : "⏳";
-      text = last ? `Working, last report ${sinceText(last)}` : "Installed. Waiting for the first report: start a new Claude Code session.";
-      if (part === "statusline" && setup.statusline?.chained) text += " (after your own status line)";
-      actions = null;
     }
     return <li className={`setup-line setup-${state}${state === "ours" && last ? " is-ok" : ""}`}>
       <span className="setup-icon" aria-hidden="true">{icon}</span>
       <div className="setup-text"><b>{title}</b><span>{text}</span><small>{purpose}</small></div>
       <div className="setup-actions">
         {actions}
-        {!installed && <button type="button" className="link-button" onClick={() => skip(part, true)}>I don't need this</button>}
+        {!installed && <button type="button" className="link-button" onClick={() => onSkip(part, true)}>{t("I don't need this")}</button>}
         {installed && (confirmRemove === part
-          ? <span className="confirm-line">Remove it from Claude Code's settings?<button type="button" className="danger small" disabled={busy} onClick={() => void run({ action: "remove", parts: [part] })}>Remove</button><button type="button" className="link-button" onClick={() => setConfirmRemove(null)}>Cancel</button></span>
-          : <button type="button" className="link-button" onClick={() => setConfirmRemove(part)}>Remove</button>)}
+          ? <span className="confirm-line">{t("Remove it from Claude Code's settings?")}<button type="button" className="danger small" disabled={busy} onClick={() => void run({ action: "remove", parts: [part] })}>{t("Remove")}</button><button type="button" className="link-button" onClick={() => setConfirmRemove(null)}>{t("Cancel")}</button></span>
+          : <button type="button" className="link-button" onClick={() => setConfirmRemove(part)}>{t("Remove")}</button>)}
       </div>
     </li>;
   };
@@ -486,220 +757,165 @@ function ClaudeSetupCheck({ setup, onChange }: { setup: ClaudeSetup | null; onCh
     hooks: Object.fromEntries(HOOK_EVENT_NAMES.map((event) => [event, [{ hooks: [{ type: "command", command: setup.hook_command, timeout: 3 }] }]])),
   }, null, 2);
   return <div className="setup-check">
-    <div className="setup-head"><b>Claude Code setup</b><small>Both run small scripts from this Bridge while Claude Code works; they only report to this computer.</small></div>
+    <div className="setup-head"><b>{t("Claude Code setup")}</b><small>{t("Both run small scripts from this Bridge while Claude Code works; they only report to this computer.")}</small></div>
     <ul className="setup-lines">{line("statusline")}{line("hooks")}</ul>
     {message && <p className={message.ok ? "setup-message" : "setup-message is-error"} role="status">{message.text}</p>}
     <details className="ollama-advanced">
-      <summary>Do it yourself</summary>
-      <p className="ollama-hint">Add these to {setup.settings_path} (merge with what is there), then start a new Claude Code session.</p>
+      <summary>{t("Do it yourself")}</summary>
+      <p className="ollama-hint">{t("Add these to {path} (merge with what is there), then start a new Claude Code session.", { path: setup.settings_path })}</p>
       <pre className="setup-snippet">{snippet}</pre>
-      <button type="button" className="small" onClick={() => void navigator.clipboard?.writeText(snippet)}>Copy</button>
+      <button type="button" className="small" onClick={() => void navigator.clipboard?.writeText(snippet)}>{t("Copy")}</button>
     </details>
   </div>;
 }
 
-function ClaudeCodeCard({ config, snapshot, updateConfig, setup, onSetupChange }: {
-  config: Config | null;
-  snapshot?: PluginSnapshot;
-  updateConfig: (change: (current: Config) => Config) => void;
-  setup: ClaudeSetup | null;
-  onSetupChange: (body: SetupChange) => Promise<string | null>;
-}) {
-  const pluginConfig = config?.plugins?.claude_code as ClaudeCodeConfig | undefined;
-  const setField = (field: keyof ClaudeCodeConfig, value: string | number | boolean | null) => {
-    updateConfig((current) => ({
-      ...current,
-      plugins: {
-        ...current.plugins,
-        claude_code: { ...current.plugins.claude_code, [field]: value },
-      },
-    }));
-  };
-  return <section className="panel provider-card claude-code-card">
-    <p>CLAUDE CODE</p>
-    <h2>Sessions &amp; quota</h2>
-    <label className="toggle-field claude-code-toggle"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setField("enabled", event.target.checked)} /> Enable Claude Code provider</label>
-    <ClaudeSetupCheck setup={setup} onChange={onSetupChange} />
-    <details className="ollama-advanced">
-      <summary>Advanced settings</summary>
-      <label>Claude executable
-        <input type="text" placeholder="claude (use PATH)" value={pluginConfig?.claude_path ?? ""} onChange={(event) => setField("claude_path", event.target.value || null)} />
-      </label>
-      <label>Claude data folder
-        <input type="text" placeholder="Use current ~/.claude folder" value={pluginConfig?.claude_home ?? ""} onChange={(event) => setField("claude_home", event.target.value || null)} />
-      </label>
-      <label>Companion plugin folder
-        <input type="text" placeholder="Optional path to the bundled integration" value={pluginConfig?.plugin_dir ?? ""} onChange={(event) => setField("plugin_dir", event.target.value || null)} />
-      </label>
-      <label>Recent Sessions
-        <input type="number" min={1} max={15} value={pluginConfig?.max_sessions ?? 15} onChange={(event) => setField("max_sessions", Number(event.target.value))} />
-      </label>
-    </details>
-    {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
-    <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>recent Claude Code Sessions available to button zones</span></div>
-    {snapshot?.signals && <UsageBars signals={snapshot.signals} generic display={config?.stream_deck.quota_display ?? "remaining"} />}
-    <p className="provider-note">Session state comes from the running Claude process and its transcript, so it works without setup; the companion hook (installed above) adds an exact WAIT when Claude needs your approval. SUB means the turn ended but subagents or other agents still work for it. Quota appears after Claude Code's status line receives its first API response.</p>
-  </section>;
+// -- Connected services --------------------------------------------------------
+// The Configuration page lists only the services in use; "+ Add service" offers
+// the rest. A service is a plugin, or one usage-API source.
+type ServiceGroup = "agent" | "monthly" | "payg";
+type ServiceStatus = "ok" | "stale" | "error" | "pending" | "loading" | "off";
+type ServiceItem = {
+  key: string;
+  group: ServiceGroup;
+  name: string;
+  sub?: string;
+  billing?: Billing;
+  status: ServiceStatus;
+  summary: string;
+  problem?: string;
+  dirty: boolean;
+  leaving: boolean;
+  warn?: string;
+  // Added in this session and never saved: removing it simply drops it.
+  fresh: boolean;
+  boundKeys: number;
+  detail: ReactNode;
+  turnOff?: () => void;
+  undo?: () => void;
+  removeLabel: string;
+};
+type ServiceChoice = { id: string; group: ServiceGroup; name: string; needs: string; billing?: Billing; connected: boolean; pick: () => string };
+
+const PLUGIN_SERVICES: { id: string; group: ServiceGroup; name: string; billing?: Billing; needs: string }[] = [
+  { id: "claude_code", group: "agent", name: "Claude Code", needs: "Nothing: reads Claude Code on this computer." },
+  { id: "codex", group: "agent", name: "Codex", needs: "Nothing: uses the codex installed on this computer." },
+  { id: "opencode", group: "agent", name: "OpenCode", needs: "A running OpenCode server." },
+  { id: "ollama_quota", group: "monthly", name: "Ollama Cloud (session cookie)", billing: "monthly", needs: "A cookie copied from the browser. The API key choice is easier." },
+];
+const SERVICE_GROUPS: [ServiceGroup, string][] = [["agent", "Agent chats"], ["monthly", "Monthly plans"], ["payg", "Pay as you go and custom"]];
+
+function servicePanelId(key: string) {
+  return `svc-${key.replace(/[^a-z0-9_-]/gi, "-")}`;
 }
 
-// Known usage APIs; the Bridge fills in URL and fields for these (http_quota PRESETS).
-const USAGE_PRESETS: { id: string; name: string; hint: string }[] = [
-  { id: "openrouter", name: "OpenRouter key limit", hint: "Any OpenRouter API key that has a spending limit." },
-  { id: "openrouter_credits", name: "OpenRouter credits", hint: "Account credits; OpenRouter may require a management key." },
-  { id: "deepseek", name: "DeepSeek balance", hint: "A DeepSeek API key (platform.deepseek.com → API keys). Reading the balance costs nothing." },
-  { id: "moonshot", name: "Moonshot balance (international)", hint: "An API key from platform.moonshot.ai (USD account). Reading the balance costs nothing." },
-  { id: "moonshot_cn", name: "Moonshot balance (China)", hint: "An API key from platform.moonshot.cn (CNY account). Reading the balance costs nothing." },
-  { id: "siliconflow", name: "SiliconFlow balance (China)", hint: "An API key from cloud.siliconflow.cn (CNY account). Reading the balance costs nothing." },
-  { id: "siliconflow_intl", name: "SiliconFlow balance (international)", hint: "An API key from cloud.siliconflow.com (USD account). Reading the balance costs nothing." },
-  { id: "novita", name: "Novita balance", hint: "An API key from novita.ai (Key Management). Reading the balance costs nothing." },
-  { id: "ollama", name: "Ollama Cloud credits", hint: "An ollama.com API key (Settings → Keys). Reading the balance uses no credits; no cookie needed." },
-  { id: "custom", name: "Custom JSON API", hint: "Any HTTPS endpoint that returns usage as JSON." },
-];
-const WINDOW_MODES: { id: keyof UsageWindow; name: string; fields: (keyof UsageWindow)[] }[] = [
-  { id: "used_percent", name: "Used %", fields: ["used_percent"] },
-  { id: "remaining_percent", name: "Remaining %", fields: ["remaining_percent"] },
-  { id: "used", name: "Used / limit", fields: ["used", "limit"] },
-  { id: "remaining", name: "Remaining / limit", fields: ["remaining", "limit"] },
-];
+// The most used window decides the summary: what is closest to running out.
+const CURRENCY_SIGNS: Record<string, string> = { CNY: "¥", USD: "$", EUR: "€", JPY: "¥" };
 
-function windowMode(window: UsageWindow): keyof UsageWindow {
-  if (window.remaining_percent !== undefined) return "remaining_percent";
-  if (window.used !== undefined) return "used";
-  if (window.remaining !== undefined) return "remaining";
-  return "used_percent";
+function moneyText(amount: unknown, currency: unknown) {
+  if (typeof amount !== "number" || !Number.isFinite(amount)) return null;
+  const code = typeof currency === "string" ? currency : "";
+  const text = Math.abs(amount).toFixed(2);
+  // A debt reads -$1.23; anything that rounds to zero is just $0.00.
+  const minus = amount < 0 && Number(text) !== 0 ? "-" : "";
+  return `${minus}${CURRENCY_SIGNS[code] ?? (code ? `${code} ` : "")}${text}`;
 }
 
-function HttpQuotaCard({ config, snapshot, updateConfig }: {
-  config: Config | null;
-  snapshot?: PluginSnapshot;
-  updateConfig: (change: (current: Config) => Config) => void;
-}) {
-  const pluginConfig = config?.plugins?.http_quota as HttpQuotaConfig | undefined;
-  const sources = pluginConfig?.sources ?? [];
-  const display = config?.stream_deck.quota_display ?? "remaining";
-  const setFields = (fields: Partial<HttpQuotaConfig>) => {
-    updateConfig((current) => ({
-      ...current,
-      plugins: { ...current.plugins, http_quota: { ...current.plugins.http_quota, ...fields } },
-    }));
+function moneyLeft(signals: QuotaSignals | null | undefined) {
+  const text = moneyText(signals?.primary_amount_left, signals?.primary_currency);
+  return text ? t("{amount} left", { amount: text }) : "";
+}
+
+function quotaSummary(signals: QuotaSignals | null | undefined, display: QuotaDisplay) {
+  if (!signals) return "";
+  const used = ["primary_percent", "secondary_percent", "session_percent", "weekly_percent"]
+    .map((name) => signals[name])
+    .filter((value): value is number => typeof value === "number");
+  return used.length ? quotaShown(Math.max(...used), display).text : "";
+}
+
+function ServiceRow({ item, open, onToggle }: { item: ServiceItem; open: boolean; onToggle: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const id = servicePanelId(item.key);
+  const statusText = { ok: t("Working"), stale: t("Last seen, not current"), error: t("Needs attention"), pending: t("Starts after Save"), loading: t("Reading…"), off: t("Turned off after Save") }[item.status];
+  const moveFocus = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const heads = [...document.querySelectorAll<HTMLButtonElement>(".service-row-head")];
+    const at = heads.indexOf(event.currentTarget);
+    const target = { ArrowDown: heads[at + 1], ArrowUp: heads[at - 1], Home: heads[0], End: heads[heads.length - 1] }[event.key];
+    if (target) { event.preventDefault(); target.focus(); }
   };
-  const setSources = (next: UsageSource[]) => setFields({ sources: next });
-  const setSource = (index: number, fields: Partial<UsageSource>) => setSources(sources.map((source, at) => at === index ? { ...source, ...fields } : source));
-  const freeId = (base: string) => {
-    const taken = new Set(sources.map((source) => source.id));
-    let id = base;
-    for (let n = 2; taken.has(id); n += 1) id = `${base}-${n}`;
-    return id;
+  // Esc closes the row, but not while typing in one of its fields.
+  const closeOnEscape = (event: React.KeyboardEvent<HTMLLIElement>) => {
+    if (event.key !== "Escape" || !open) return;
+    if ((event.target as HTMLElement).closest("input, textarea, select")) return;
+    onToggle();
+    (event.currentTarget.querySelector(".service-row-head") as HTMLElement | null)?.focus();
   };
-  const setWindows = (index: number, windows: UsageWindow[]) => setSource(index, { windows });
-  const setWindow = (index: number, at: number, fields: Partial<UsageWindow>) => {
-    const windows = [...(sources[index].windows ?? [])];
-    windows[at] = { ...windows[at], ...fields };
-    setWindows(index, windows);
-  };
-  // Switching what a row reads clears its path: the old one meant something else.
-  const setWindowMode = (index: number, at: number, mode: keyof UsageWindow) => {
-    const { used_percent: _used, remaining_percent: _left, used: _amount, remaining: _rest, limit, ...rest } = sources[index].windows?.[at] ?? {};
-    const next: UsageWindow = { ...rest, [mode]: "" };
-    if (mode === "used" || mode === "remaining") next.limit = limit ?? "";
-    const windows = [...(sources[index].windows ?? [])];
-    windows[at] = next;
-    setWindows(index, windows);
-  };
-  return <section className="panel provider-card usage-card">
-    <p>USAGE APIS</p>
-    <h2>Quota from a usage API</h2>
-    <label className="toggle-field"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setFields({ enabled: event.target.checked })} /> Enable usage API quota provider</label>
-    <p className="ollama-hint">One source per account: pick the service and paste its key. Keys stay in the local Bridge and are never returned to this page. Then choose the source as the Account of a Usage Api quota key in Buttons.</p>
-    {sources.map((source, index) => {
-      const preset = USAGE_PRESETS.find((item) => item.id === (source.preset || "custom")) ?? USAGE_PRESETS[USAGE_PRESETS.length - 1];
-      const custom = preset.id === "custom";
-      const windows = source.windows ?? [];
-      const account = snapshot?.accounts?.find((item) => item.id === source.id);
-      const advanced = <>
-        <label>URL
-          <input type="text" placeholder={custom ? "https://api.example.com/usage" : "Preset default"} value={source.url ?? ""} onChange={(event) => setSource(index, { url: event.target.value || null })} />
-        </label>
-        <p className="ollama-hint">Never put a key in the URL. Pointing a source at another host asks for its key again.</p>
-        <div className="usage-row">
-          <label>Key header
-            <input type="text" placeholder="Authorization" value={source.auth_header ?? ""} onChange={(event) => setSource(index, { auth_header: event.target.value || null })} />
-          </label>
-          <label>Key format
-            <select value={source.auth_scheme === "" ? "bare" : source.auth_scheme ? "bearer" : "default"} onChange={(event) => setSource(index, { auth_scheme: event.target.value === "bare" ? "" : event.target.value === "bearer" ? "Bearer" : null })}>
-              <option value="default">{custom ? "Bearer <key> (default)" : "Preset default"}</option>
-              <option value="bearer">Bearer &lt;key&gt;</option>
-              <option value="bare">&lt;key&gt; only</option>
-            </select>
-          </label>
+  return <li className={`service-row status-${item.status}${open ? " is-open" : ""}${item.leaving ? " is-leaving" : ""}`} onKeyDown={closeOnEscape}>
+    <button type="button" className="service-row-head" aria-expanded={open} aria-controls={open ? id : undefined} onClick={onToggle} onKeyDown={moveFocus}>
+      <span className="service-dot" aria-hidden="true" />
+      <span className="service-name"><b>{item.name}</b>{item.sub && <small>{item.sub}</small>}<span className="sr-only">{statusText}</span></span>
+      <span className="service-tags">
+        {item.billing && <BillingBadge billing={item.billing} />}
+        {item.warn && !item.leaving && <span className="tag tag-warn">{item.warn}</span>}
+        {item.leaving ? <span className="tag tag-leaving">{t("Turned off after Save")}</span> : item.dirty && <span className="tag tag-unsaved">{t("Unsaved")}</span>}
+      </span>
+      <span className="service-summary">{item.problem ? <em>{item.problem}</em> : item.summary || (item.status === "pending" ? t("Starts after Save") : item.status === "loading" ? t("Reading…") : "")}</span>
+      <span className="service-chevron" aria-hidden="true">›</span>
+    </button>
+    {open && <div id={id} role="region" aria-label={item.name} className="service-detail">
+      {item.leaving ? <p className="fix-note">{t("This service goes away when you Save.")} {item.undo && <button type="button" className="link-button" onClick={item.undo}>{t("Undo")}</button>}</p> : <>
+        {item.detail}
+        <div className="service-danger">
+          {confirming ? <span className="confirm-line">
+            {item.boundKeys > 0 ? t("{n} key(s) use it and will show no data.", { n: item.boundKeys }) + " " : ""}{item.fresh ? t("It was never saved, so what you entered is dropped.") : t("It goes away when you Save; until then you can undo.")}
+            <button type="button" className="danger" onClick={() => { setConfirming(false); item.turnOff?.(); }}>{item.removeLabel}</button>
+            <button type="button" className="link-button" onClick={() => setConfirming(false)}>{t("Cancel")}</button>
+          </span> : <button type="button" className="link-button danger-link" onClick={() => setConfirming(true)}>{item.removeLabel}</button>}
         </div>
-        <label>Key from environment variable
-          <input type="text" placeholder="Optional, e.g. OPENROUTER_API_KEY" value={source.api_key_env ?? ""} onChange={(event) => setSource(index, { api_key_env: event.target.value || null })} />
-        </label>
-        <p className="ollama-hint">{custom ? "Where the numbers are in the JSON reply" : "Rows replace the preset's rows when added"}: paths like <code>data.limit</code>, <code>items.0.used</code> or <code>limits[type=TOKENS,unit=3].percentage</code>. Reset times may be ISO text or epoch seconds/milliseconds.</p>
-        {[0, 1].map((at) => {
-          const window = windows[at];
-          if (!window) {
-            return at === windows.length ? <button key={at} type="button" className="link-button" onClick={() => setWindow(index, at, { label: at === 0 ? "5H" : "WEEK", used_percent: "" })}>{at === 0 ? "Add top row" : "Add bottom row"}</button> : null;
-          }
-          const mode = windowMode(window);
-          const fields = WINDOW_MODES.find((item) => item.id === mode)?.fields ?? ["used_percent"];
-          return <fieldset key={at} className="usage-window">
-            <legend>{at === 0 ? "Top row" : "Bottom row"} · <button type="button" className="link-button" onClick={() => setWindows(index, windows.filter((_, other) => other !== at))}>Remove</button></legend>
-            <div className="usage-row">
-              <label>Label
-                <input type="text" maxLength={8} placeholder="5H" value={window.label ?? ""} onChange={(event) => setWindow(index, at, { label: event.target.value })} />
-              </label>
-              <label>Numbers
-                <select value={mode} onChange={(event) => setWindowMode(index, at, event.target.value as keyof UsageWindow)}>
-                  {WINDOW_MODES.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-              </label>
-            </div>
-            {fields.map((field) => <label key={field}>{`${field.replace("_", " ")} path`}
-              <input type="text" value={String(window[field] ?? "")} onChange={(event) => setWindow(index, at, { [field]: field === "limit" && /^\d+(\.\d+)?$/.test(event.target.value.trim()) ? Number(event.target.value) : event.target.value })} />
-            </label>)}
-            {(mode === "used_percent" || mode === "remaining_percent") && <label className="toggle-field"><input type="checkbox" checked={window.fraction ?? false} onChange={(event) => setWindow(index, at, { fraction: event.target.checked })} /> Value is a fraction (0–1)</label>}
-            <label>Reset time path
-              <input type="text" placeholder="Optional" value={window.reset_at ?? ""} onChange={(event) => setWindow(index, at, { reset_at: event.target.value })} />
-            </label>
-          </fieldset>;
-        })}
-      </>;
-      return <div key={index} className="account-item usage-source">
-        <div className="usage-row">
-          <label>Service
-            <select value={preset.id} onChange={(event) => setSource(index, event.target.value === "custom" ? { preset: "custom", windows: windows.length ? windows : [{ label: "5H", used_percent: "" }] } : { preset: event.target.value, url: null, auth_header: null, auth_scheme: null, windows: [] })}>
-              {USAGE_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-          <label>Label
-            <input type="text" maxLength={16} placeholder="Shown on the key" value={source.label ?? ""} onChange={(event) => setSource(index, { label: event.target.value || null })} />
-          </label>
-        </div>
-        <label>API key
-          <input
-            type="password"
-            placeholder={source.api_key_configured ? "Key saved — enter a new value to replace it" : "Paste the API key"}
-            value={source.api_key ?? ""}
-            onChange={(event) => setSource(index, { api_key: event.target.value })}
-          />
-        </label>
-        <p className="ollama-hint">{preset.hint} {source.api_key_configured && <button type="button" className="link-button" onClick={() => setSource(index, { api_key: "", api_key_configured: false })}>Forget saved key</button>}</p>
-        {custom ? advanced : <details className="ollama-advanced"><summary>Advanced settings</summary>{advanced}</details>}
-        <div className="usage-row usage-footer">
-          <label>Source ID (the key's Account)
-            <input type="text" maxLength={32} value={source.id} readOnly={source.api_key_configured === true} title={source.api_key_configured === true ? "Saved sources keep their ID; change the Label instead" : undefined} onChange={(event) => setSource(index, { id: event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "") })} />
-          </label>
-          <button type="button" className="link-button" onClick={() => setSources(sources.filter((_, other) => other !== index))}>Remove source</button>
-        </div>
-        {account && <small>{account.error ? account.error : account.signals?.stale ? "Last seen, not current" : "Current"}</small>}
-        {account?.signals && <UsageBars signals={account.signals} generic display={display} />}
-      </div>;
-    })}
-    <button type="button" onClick={() => setSources([...sources, { id: freeId("openrouter"), preset: "openrouter", api_key: "" }])}>Add source</button>
-    {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
-  </section>;
+      </>}
+    </div>}
+  </li>;
+}
+
+function AddServiceDialog({ choices, onPick, onClose }: { choices: ServiceChoice[]; onPick: (choice: ServiceChoice) => void; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.querySelector<HTMLButtonElement>(".add-quota-item:not([disabled])")?.focus();
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+      if (event.key !== "Tab" || !ref.current) return;
+      // Keep Tab inside the dialog.
+      const items = [...ref.current.querySelectorAll<HTMLElement>("button:not([disabled])")];
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !ref.current.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, []);
+  return <div className="dialog-backdrop" onClick={onClose}>
+    <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="add-service-title" ref={ref} onClick={(event) => event.stopPropagation()}>
+      <div className="dialog-head">
+        <h2 id="add-service-title">{t("Add a service")}</h2>
+        <button type="button" className="link-button" aria-label={t("Close")} onClick={onClose}>✕</button>
+      </div>
+      {SERVICE_GROUPS.map(([group, label]) => {
+        const items = choices.filter((choice) => choice.group === group);
+        if (!items.length) return null;
+        return <section key={group} className="dialog-group">
+          <h3>{t(label)}</h3>
+          <div className="add-quota-list">
+            {items.map((choice) => <button key={choice.id} type="button" className="add-quota-item" disabled={choice.connected} onClick={() => onPick(choice)}>
+              <span><b>{t(choice.name)}</b>{choice.connected ? <span className="tag tag-connected">{t("Connected")}</span> : choice.billing && <BillingBadge billing={choice.billing} />}</span>
+              <small>{t(choice.needs)}</small>
+            </button>)}
+          </div>
+        </section>;
+      })}
+    </div>
+  </div>;
 }
 
 function OpenCodeCard({ config, snapshot, updateConfig }: {
@@ -717,23 +933,24 @@ function OpenCodeCard({ config, snapshot, updateConfig }: {
       },
     }));
   };
-  return <section className="panel provider-card opencode-card">
-    <p>OPENCODE SERVERS</p>
-    <h2>Sessions</h2>
-    <label className="toggle-field opencode-toggle"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setField("enabled", event.target.checked)} /> Enable OpenCode provider</label>
-    <label>Server endpoints
+  return <section className={cardClass("panel provider-card opencode-card", pluginConfig?.enabled)}>
+    <p className="card-keep">{t("OPENCODE SERVERS")}</p>
+    <h2 className="card-keep">{t("Sessions")}</h2>
+    <label className="card-keep toggle-field opencode-toggle"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setField("enabled", event.target.checked)} /> {t("Enable OpenCode provider")}</label>
+    {!pluginConfig?.enabled && <p className="card-keep off-note">{t("Off. Turn it on to set it up; changes apply after Save.")}</p>}
+    <label>{t("Server endpoints")}
       <textarea
         rows={3}
-        placeholder="One endpoint per line"
+        placeholder={t("One endpoint per line")}
         value={(pluginConfig?.endpoints ?? []).join("\n")}
         onChange={(event) => setField("endpoints", event.target.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean))}
       />
     </label>
-    <label>Password environment variable
-      <input type="text" placeholder="Optional" value={pluginConfig?.password_env ?? ""} onChange={(event) => setField("password_env", event.target.value || null)} />
+    <label>{t("Password environment variable")}
+      <input type="text" placeholder={t("Optional")} value={pluginConfig?.password_env ?? ""} onChange={(event) => setField("password_env", event.target.value || null)} />
     </label>
-    {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
-    <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>OpenCode sessions available to button zones</span></div>
+    <Health health={snapshot?.health} />
+    <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>{t("OpenCode sessions available to button zones")}</span></div>
   </section>;
 }
 
@@ -741,14 +958,26 @@ function App() {
   const [activeTab, setActiveTab] = useState<"buttons" | "configuration">("buttons");
   const [config, setConfig] = useState<Config | null>(null);
   const [snapshots, setSnapshots] = useState<Record<string, PluginSnapshot>>({});
-  const [claudeSetup, setClaudeSetup] = useState<ClaudeSetup | null>(null);
   const [manifests, setManifests] = useState<PluginManifest[]>([]);
   const [status, setStatus] = useState<BridgeStatus | null>(null);
   const [editingKey, setEditingKey] = useState(0);
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
+  // The configuration as last saved, to mark unsaved services.
+  const [savedConfig, setSavedConfig] = useState<Config | null>(null);
+  const [claudeSetup, setClaudeSetup] = useState<ClaudeSetup | null>(null);
+  const [setupSkipped, setSetupSkipped] = useState<string[]>(readSkipped);
+  const skipSetup = (part: string, skip: boolean) => setSetupSkipped((current) => {
+    const next = skip ? [...new Set([...current, part])] : current.filter((item) => item !== part);
+    writeSkipped(next);
+    return next;
+  });
+  const [openServices, setOpenServices] = useState<Set<string>>(new Set());
+  const [focusService, setFocusService] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
   const refreshInFlightRef = useRef(false);
-  const [notice, setNotice] = useState("Connecting to local Bridge...");
+  const [notice, setNotice] = useState(t("Connecting to local Bridge..."));
   const [dragSource, setDragSource] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
 
@@ -762,14 +991,17 @@ function App() {
         api<PluginManifest[]>("plugins"),
         api<BridgeStatus>("status?include_plugins=false"),
       ]);
-      if (replaceLocalConfig || !dirtyRef.current) setConfig(nextConfig);
+      if (replaceLocalConfig || !dirtyRef.current) {
+        setConfig(nextConfig);
+        setSavedConfig(nextConfig);
+      }
       setSnapshots(nextSnapshots);
-      api<ClaudeSetup>("claude-code/setup").then(setClaudeSetup, () => setClaudeSetup(null));
       setManifests(nextManifests);
+      api<ClaudeSetup>("claude-code/setup").then(setClaudeSetup, () => setClaudeSetup(null));
       setStatus(nextStatus);
       if (!dirtyRef.current) setNotice("");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Bridge unavailable");
+      setNotice(error instanceof Error ? error.message : t("Bridge unavailable"));
     } finally {
       refreshInFlightRef.current = false;
     }
@@ -781,15 +1013,183 @@ function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const [editingState, setEditingState] = useState<string | null>(null);
   const updateConfig = (change: (current: Config) => Config) => {
     setConfig((current) => (current ? change(current) : current));
     dirtyRef.current = true;
     setDirty(true);
-    setNotice("Configuration changed. Save to apply it to the physical Deck.");
   };
 
   const selectedBinding = config?.buttons.find((button) => button.key_index === editingKey) ?? null;
+  const quotaDisplay = config?.stream_deck.quota_display ?? "remaining";
+  const stateColors = config?.stream_deck.state_colors ?? {};
+  const sessionLine = config?.stream_deck.session_accent_line ?? true;
+  const setDeckOption = (name: "session_accent_line", value: boolean) => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, [name]: value } }));
+  const [editingState, setEditingState] = useState<string | null>(null);
+  const resetStateColors = () => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, state_colors: {} } }));
+  const setStateColor = (state: string, color: string | null) => updateConfig((current) => {
+    const next = { ...(current.stream_deck.state_colors ?? {}) };
+    if (color) next[state] = color; else delete next[state];
+    return { ...current, stream_deck: { ...current.stream_deck, state_colors: next } };
+  });
+  const pluginOn = (id: string) => Boolean((config?.plugins?.[id] as { enabled?: boolean } | undefined)?.enabled);
+  const turnOn = (id: string) => updateConfig((current) => ({ ...current, plugins: { ...current.plugins, [id]: { ...current.plugins[id], enabled: true } } }));
+  const addUsageSource = (presetId: string) => {
+    // Never reuse a saved id: its key would follow the new source.
+    const taken = new Set([...sourcesIn(config), ...sourcesIn(savedConfig)].map((source) => source.id));
+    const base = usagePreset(presetId).base;
+    let id = base;
+    for (let n = 2; taken.has(id); n += 1) id = `${base}-${n}`;
+    const source: UsageSource = presetId === "custom" ? { id, preset: "custom", api_key: "", windows: [{ label: "5H", used_percent: "" }] } : { id, preset: presetId, api_key: "" };
+    updateConfig((current) => {
+      const http = (current.plugins.http_quota ?? {}) as HttpQuotaConfig;
+      return { ...current, plugins: { ...current.plugins, http_quota: { ...http, enabled: true, sources: [...(http.sources ?? []), source] } } };
+    });
+    return id;
+  };
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // Writes Claude Code's settings: our own page only (the Bridge checks).
+  const changeClaudeSetup = async (body: { action: "install" | "remove"; parts: string[]; replace_statusline?: boolean; chain_statusline?: boolean }) => {
+    try {
+      const next = await api<ClaudeSetup>("claude-code/setup", { method: "POST", headers: { "content-type": "application/json", "x-stream-micro": "1" }, body: JSON.stringify(body) });
+      setClaudeSetup(next);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? tDetail(error.message) : t("Could not change Claude Code's settings");
+    }
+  };
+  const discard = () => {
+    setConfirmDiscard(false);
+    dirtyRef.current = false;
+    setDirty(false);
+    setNotice("");
+    void refresh(true);
+  };
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  // A service just added opens, scrolls into view and focuses its first field.
+  useEffect(() => {
+    if (!focusService) return;
+    const panel = document.getElementById(servicePanelId(focusService));
+    if (!panel) return;
+    panel.scrollIntoView({ block: "center", behavior: "smooth" });
+    const field = panel.querySelector<HTMLElement>('input[type="password"], input:not([type="checkbox"]):not([readonly]):not([type="range"]), textarea');
+    (field ?? panel.closest(".service-row")?.querySelector<HTMLElement>(".service-row-head"))?.focus();
+    setFocusService(null);
+  }, [focusService, config, openServices]);
+  const toggleService = (key: string) => setOpenServices((current) => current.has(key) ? new Set() : new Set([key]));
+  const pluginOnIn = (from: Config | null, id: string) => Boolean((from?.plugins?.[id] as { enabled?: boolean } | undefined)?.enabled);
+  const sourcesIn = (from: Config | null) => ((from?.plugins?.http_quota as HttpQuotaConfig | undefined)?.sources ?? []);
+  const keysUsing = (pluginId: string, account?: string) => (config?.buttons ?? []).filter((button) => button.plugin === pluginId && (account === undefined || button.action_params.account === account)).length;
+  const turnOff = (id: string) => updateConfig((current) => ({ ...current, plugins: { ...current.plugins, [id]: { ...current.plugins[id], enabled: false } } }));
+  const setSourcesTo = (next: UsageSource[]) => updateConfig((current) => ({ ...current, plugins: { ...current.plugins, http_quota: { ...current.plugins.http_quota, sources: next } } }));
+  const services: ServiceItem[] = [];
+  // Every service this Dashboard knows, started or not: the Bridge lists only
+  // providers that are running, and a new one starts after Save.
+  for (const spec of PLUGIN_SERVICES) {
+    const on = pluginOnIn(config, spec.id);
+    const wasOn = pluginOnIn(savedConfig, spec.id);
+    if (!on && !wasOn) continue;
+    const snapshot = snapshots[spec.id];
+    const health = snapshot?.health;
+    const signals = snapshot?.signals;
+    const sessions = snapshot?.sessions?.length ?? 0;
+    const parts: string[] = [];
+    if (spec.group === "agent") parts.push(t("{n} chats", { n: sessions }));
+    const quota = quotaSummary(signals, quotaDisplay);
+    if (quota) parts.push(quota);
+    if (signals?.stale && typeof signals.seen_at === "string") parts.push(t("last read {time}", { time: formatReset(signals.seen_at) }));
+    const pending = on && !wasOn;
+    const status: ServiceStatus = !on ? "off" : pending ? "pending" : health && !health.connected && !signals?.stale ? "error" : signals?.stale ? "stale" : "ok";
+    const detail = {
+      claude_code: <><ClaudeSetupCheck setup={claudeSetup} onChange={changeClaudeSetup} skipped={setupSkipped} onSkip={skipSetup} /><PlanQuotaCard kicker="" title="" snapshot={snapshot} display={quotaDisplay} note={t("Claude plan: 5-hour and weekly limits.")} /><ClaudeCodeCard config={config} snapshot={snapshot} updateConfig={updateConfig} /></>,
+      codex: <><PlanQuotaCard kicker="" title="" snapshot={snapshot} display={quotaDisplay} note={t("ChatGPT plan of the account signed in to the local codex.")} /><CodexCard config={config} snapshot={snapshot} updateConfig={updateConfig} /></>,
+      opencode: <OpenCodeCard config={config} snapshot={snapshot} updateConfig={updateConfig} />,
+      ollama_quota: <OllamaQuotaCard config={config} snapshot={snapshot} updateConfig={updateConfig} />,
+    }[spec.id];
+    services.push({
+      key: `plugin:${spec.id}`,
+      group: spec.group,
+      name: t(spec.name),
+      billing: spec.billing,
+      status,
+      summary: parts.join(" · "),
+      warn: spec.id === "claude_code" && on && setupNeedsWork(claudeSetup, setupSkipped) ? t("Setup incomplete") : undefined,
+      problem: status === "error" ? tDetail(health?.detail) : undefined,
+      dirty: JSON.stringify(config?.plugins?.[spec.id]) !== JSON.stringify(savedConfig?.plugins?.[spec.id]),
+      leaving: !on,
+      fresh: pending,
+      boundKeys: keysUsing(spec.id),
+      detail,
+      turnOff: () => turnOff(spec.id),
+      undo: () => turnOn(spec.id),
+      removeLabel: t("Turn off"),
+    });
+  }
+  const currentSources = sourcesIn(config);
+  // Sources of a provider that was off are not "connected": no rows for them.
+  const savedSources = pluginOnIn(savedConfig, "http_quota") ? sourcesIn(savedConfig) : [];
+  const httpOn = pluginOnIn(config, "http_quota");
+  // Rows of current sources are keyed by position, so editing an id keeps the
+  // row open; removed saved sources follow, keyed by their saved id.
+  const rows: { key: string; current?: UsageSource; saved?: UsageSource }[] = [
+    ...(httpOn ? currentSources : []).map((source, index) => ({ key: `source:#${index}`, current: source, saved: savedSources.find((item) => item.id === source.id) })),
+    ...savedSources.filter((source) => !(httpOn ? currentSources : []).some((item) => item.id === source.id)).map((source) => ({ key: `source:saved:${source.id}`, saved: source })),
+  ];
+  for (const { key, current, saved } of rows) {
+    const source = current ?? saved;
+    if (!source) continue;
+    const sourceId = source.id;
+    const preset = usagePreset(source.preset);
+    const account = snapshots.http_quota?.accounts?.find((item) => item.id === sourceId);
+    const pending = Boolean(current) && !saved;
+    const status: ServiceStatus = !current ? "off" : pending ? "pending" : !account ? "loading" : account.error ? "error" : account.signals?.stale ? "stale" : "ok";
+    services.push({
+      key,
+      group: preset.billing,
+      name: t(preset.name),
+      sub: source.label || source.id,
+      billing: preset.billing,
+      status,
+      summary: [moneyLeft(account?.signals) || quotaSummary(account?.signals, quotaDisplay), account?.signals?.stale && typeof account.signals.seen_at === "string" ? t("last read {time}", { time: formatReset(account.signals.seen_at) }) : ""].filter(Boolean).join(" · "),
+      problem: status === "error" && account?.error ? tDetail(account.error) : undefined,
+      dirty: JSON.stringify(current) !== JSON.stringify(saved),
+      leaving: !current,
+      fresh: pending,
+      boundKeys: keysUsing("http_quota", sourceId),
+      detail: <UsageSourceCards config={config} snapshot={snapshots.http_quota} updateConfig={updateConfig} only={sourceId} savedIds={new Set(sourcesIn(savedConfig).map((item) => item.id))} />,
+      turnOff: () => { setSourcesTo(currentSources.filter((item) => item !== current)); setOpenServices(new Set()); },
+      undo: saved ? () => updateConfig((cfg) => ({ ...cfg, plugins: { ...cfg.plugins, http_quota: { ...cfg.plugins.http_quota, enabled: true, sources: [...sourcesIn(cfg), saved] } } })) : undefined,
+      removeLabel: t("Remove"),
+    });
+  }
+  const serviceChoices: ServiceChoice[] = [
+    ...PLUGIN_SERVICES.map((spec) => ({
+      id: spec.id, group: spec.group, name: spec.name, needs: spec.needs, billing: spec.billing,
+      connected: pluginOnIn(config, spec.id),
+      pick: () => { turnOn(spec.id); return `plugin:${spec.id}`; },
+    })),
+    ...USAGE_PRESETS.map((preset) => ({
+      id: `http:${preset.id}`, group: preset.billing as ServiceGroup, name: preset.name, billing: preset.billing, connected: false,
+      needs: (preset.id === "custom" ? t("A URL that returns usage as JSON, a key, and where the numbers are.") : t("Paste an API key."))
+        + (sourcesIn(config).filter((source) => (source.preset || "custom") === preset.id).length ? " " + t("You already have {n}; this adds another account.", { n: sourcesIn(config).filter((source) => (source.preset || "custom") === preset.id).length }) : ""),
+      pick: () => { addUsageSource(preset.id); return `source:#${currentSources.length}`; },
+    })),
+  ];
+  const pickService = (choice: ServiceChoice) => {
+    const key = choice.pick();
+    setAdding(false);
+    setOpenServices(new Set([key]));
+    setFocusService(key);
+  };
+  // Provider names as each Plugin gives them ("Usage API quota", not "Http Quota").
+  const pluginName = (id: string | null | undefined) => {
+    const name = manifests.find((manifest) => manifest.id === id)?.name;
+    return name ? t(name) : displayName(id);
+  };
   const selectedManifest = manifests.find((manifest) => manifest.id === selectedBinding?.plugin) ?? null;
   const sessionsForPlugin = (pluginId: string | null | undefined) => pluginId ? snapshots[pluginId]?.sessions ?? [] : [];
   const totalSessions = Object.values(snapshots).reduce((total, snapshot) => total + (snapshot.sessions?.length ?? 0), 0);
@@ -1040,9 +1440,9 @@ function App() {
     if (swapped) {
       updateConfig((current) => ({ ...current, buttons: swapped }));
       setEditingKey(keyIndex);
-      setNotice(`Moved key ${dragSource + 1} to key ${keyIndex + 1}. Save to apply.`);
+      setNotice(t("Moved key {from} to key {to}. Save to apply.", { from: dragSource + 1, to: keyIndex + 1 }));
     } else {
-      setNotice("Cannot drop here — span zone would overflow or overlap.");
+      setNotice(t("Cannot drop here — span zone would overflow or overlap."));
     }
     setDragSource(null);
     setDragOver(null);
@@ -1093,45 +1493,29 @@ function App() {
     updateBinding({ action_params: params });
   };
 
-  // Writes Claude Code's settings: the Bridge accepts this only from its own page.
-  const changeClaudeSetup = async (body: SetupChange) => {
-    try {
-      setClaudeSetup(await api<ClaudeSetup>("claude-code/setup", { method: "POST", headers: { "x-stream-micro": "1" }, body: JSON.stringify(body) }));
-      return null;
-    } catch (error) {
-      return error instanceof Error ? error.message : "Could not change Claude Code's settings";
-    }
-  };
-
-  const stateColors = config?.stream_deck.state_colors ?? {};
-  const sessionLine = config?.stream_deck.session_accent_line ?? true;
-  const setStateColor = (state: string, color: string | null) => updateConfig((current) => {
-    const next = { ...(current.stream_deck.state_colors ?? {}) };
-    if (color) next[state] = color; else delete next[state];
-    return { ...current, stream_deck: { ...current.stream_deck, state_colors: next } };
-  });
-  const resetStateColors = () => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, state_colors: {} } }));
-
   const save = async () => {
     if (!config || !dirtyRef.current) return;
     try {
       const saved = await api<Config>("config", { method: "PUT", body: JSON.stringify(config) });
       setConfig(saved);
+      setSavedConfig(saved);
       dirtyRef.current = false;
       setDirty(false);
-      setNotice("Saved. The physical Deck updates on its next refresh.");
+      setNotice(t("Saved. The physical Deck updates on its next refresh."));
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not save configuration");
+      const reason = error instanceof Error ? error.message : "";
+      const hint = fixHint(reason);
+      setNotice(reason ? `${t("Not saved:")} ${tDetail(reason)}${hint ? ` ${hint}` : ""}` : t("Could not save configuration"));
     }
   };
 
-  return <main className="app-shell">
+  return <main className={`app-shell${dirty ? " has-unsaved" : ""}`}>
     <header className="topbar">
-      <div className="brand"><span className="brand-mark">DB</span><div><p>LOCAL CONTROL SURFACE</p><h1>Deck Bridge</h1></div></div>
+      <div className="brand"><span className="brand-mark">DB</span><div><p>{t("LOCAL CONTROL SURFACE")}</p><h1>Deck Bridge</h1></div></div>
       <div className="topbar-right">
-        <span className={`connection ${status?.device.connected ? "online" : "offline"}`}><i /> {status?.device.connected ? "MK.2 connected" : "Deck offline"}</span>
-        <button onClick={() => void refresh(true)}>Refresh</button>
-        <button className="primary" disabled={!dirty} onClick={() => void save()}>{dirty ? "Save changes" : "Saved"}</button>
+        <span className={`connection ${status?.device.connected ? "online" : "offline"}`}><i /> {status?.device.connected ? t("MK.2 connected") : t("Deck offline")}</span>
+        <button onClick={() => void refresh(true)}>{t("Refresh")}</button>
+        <button className="primary" disabled={!dirty} onClick={() => void save()}>{dirty ? t("Save changes") : t("Saved")}</button>
       </div>
     </header>
     {notice && <div className="notice">{notice}</div>}
@@ -1143,8 +1527,8 @@ function App() {
         className={activeTab === "buttons" ? "is-active" : ""}
         onClick={() => setActiveTab("buttons")}
       >
-        <span>Buttons</span>
-        <small>Deck layout and actions</small>
+        <span>{t("Buttons")}</span>
+        <small>{t("Deck layout and actions")}</small>
       </button>
       <button
         type="button"
@@ -1153,15 +1537,15 @@ function App() {
         className={activeTab === "configuration" ? "is-active" : ""}
         onClick={() => setActiveTab("configuration")}
       >
-        <span>Configuration</span>
-        <small>Hardware, providers and quota</small>
+        <span>{t("Configuration")}</span>
+        <small>{t("Hardware, providers and quota")}</small>
       </button>
     </nav>
     {activeTab === "buttons" ? <div className="workspace" role="tabpanel" aria-label="Button configuration">
       <section className="deck-panel panel">
         <div className="section-heading">
-          <div><p>MK.2 BUTTON LAYOUT</p><h2>Choose a key to edit</h2><span>This browser preview never runs a key action. Only the physical Stream Deck does.</span></div>
-          <div className="session-count"><b>{totalSessions}</b><span>provider sessions</span></div>
+          <div><p>{t("MK.2 BUTTON LAYOUT")}</p><h2>{t("Choose a key to edit")}</h2><span>{t("This browser preview never runs a key action. Only the physical Stream Deck does.")}</span></div>
+          <div className="session-count"><b>{totalSessions}</b><span>{t("provider sessions")}</span></div>
         </div>
         <div className="deck-frame"><div className="deck-grid">
           {Array.from({ length: 15 }, (_, index) => {
@@ -1174,17 +1558,19 @@ function App() {
             const isParent = parent !== undefined && parent.key_index === index;
             const isQuota = button?.component === "quota";
             const quota = isQuota ? quotaPreview(button, snapshot) : undefined;
-            const label = session?.title ?? (quota ? quota.title || `${displayName(pluginId)} quota` : isChild ? "Session slot" : displayName(button?.component ?? null));
-            const sublabel = session ? `${displayName(pluginId)} · ${session.project ?? "No project"}` : isChild ? `${displayName(pluginId)} · slot ${index - (parent?.key_index ?? 0) + 1}` : pluginId ? displayName(pluginId) : "Unassigned";
+            const provider = pluginName(pluginId);
+            const label = session?.title ?? (quota ? quota.title || provider : isChild ? t("Session slot") : displayName(button?.component ?? null));
+            const sublabel = session ? `${provider} · ${session.project ?? t("No project")}` : isChild ? `${provider} · ${t("slot {n}", { n: index - (parent?.key_index ?? 0) + 1 })}` : quota && !quota.title ? t("Quota key") : pluginId ? provider : t("Unassigned");
             const quotaDisplay = config?.stream_deck.quota_display ?? "remaining";
-            const state = session?.state ?? (quota ? quota.problem ?? `${quota.amount ?? quotaShown(quota.used ?? 0, quotaDisplay).text}${quota.stale ? " (last seen)" : ""}` : snapshot && !snapshot.health.connected ? snapshot.health.detail : button?.action ? displayName(button.action) : "No action");
+            const state = session ? stateText(session.state) : (quota ? (quota.problem ? tDetail(quota.problem) : `${quota.amount ?? quotaShown(quota.used ?? 0, quotaDisplay).text}${quota.stale ? ` ${t("(last seen)")}` : ""}`) : snapshot && !snapshot.health.connected ? tDetail(snapshot.health.detail) : button?.action ? displayName(button.action) : t("No action"));
             const stateColor = !session && quota && !quota.problem ? quota.stale ? STALE_COLOR : pctColor(quota.used) : undefined;
             const isPinned = status?.pinned_sessions?.[String(index)]?.plugin === pluginId;
-            const accent = (parent ?? button)?.accent || (pluginId ? PROVIDER_ACCENTS[pluginId] : undefined);
-            const base = pluginId && (session || isQuota || isChild) ? PROVIDER_BACKGROUNDS[pluginId] : undefined;
-            // Quota and other keys always keep the line; Session keys may drop it.
+            const styleId = pluginId ?? "";
+            const accent = (parent ?? button)?.accent || PROVIDER_ACCENTS[styleId] || undefined;
+            const base = pluginId && (session || isQuota || isChild) ? PROVIDER_BACKGROUNDS[styleId] : undefined;
             const tileStyle = {
               ...(base ? { background: base } : {}),
+              // Quota and other keys always keep the line; Session keys may drop it.
               ...(accent && (!session || sessionLine) ? { boxShadow: `inset 0 3px ${accent}` } : { boxShadow: "none" }),
             };
             return <button
@@ -1192,7 +1578,7 @@ function App() {
               key={index}
               type="button"
               draggable
-              title={`Edit key ${index + 1}: ${label}${isPinned ? " (pinned)" : ""} — drag to rearrange`}
+              title={`${t("Edit key {n}: {label}", { n: index + 1, label })}${isPinned ? ` ${t("(pinned)")}` : ""} — ${t("drag to rearrange")}`}
               className={`deck-key ${session ? "session-key" : "utility-key"} provider-${pluginId ?? "none"} ${editingKey === index ? "is-editing" : ""} ${isPinned ? "is-pinned" : ""} ${isParent && parent && parent.span > 1 ? "is-zone-parent" : ""} ${isChild ? "is-zone-child" : ""} ${dragSource === index ? "is-dragging" : ""} ${dragOver === index && dragSource !== null && dragSource !== index ? "is-drop-target" : ""}`}
               aria-pressed={editingKey === index}
               onClick={() => setEditingKey(index)}
@@ -1201,44 +1587,45 @@ function App() {
               onDragOver={(event) => handleDragOver(event, index)}
               onDragLeave={handleDragLeave}
               onDrop={() => handleDrop(index)}
-            >{session && <span className="state-band" style={{ ...sessionStateChip(session.state, stateColors), top: sessionLine ? 3 : 0 }}>{state}</span>}<span className="key-index">{index + 1}</span><strong style={quota && accent ? { color: accent } : undefined}>{label}</strong><small>{sublabel}</small>{!session && <em style={stateColor ? { color: stateColor } : undefined}>{state}</em>}<span className="drag-handle" aria-hidden="true">⠿</span></button>;
+            >{session && <span className="state-band" style={{ ...sessionStateChip(session.state, stateColors), top: sessionLine ? 3 : 0 }}>{STATE_WORDS[session.state] ?? session.state.toUpperCase()}</span>}<span className="key-index">{index + 1}</span><strong style={quota && accent ? { color: accent } : undefined}>{label}</strong><small>{sublabel}</small>{!session && <em style={stateColor ? { color: stateColor } : undefined}>{state}</em>}<span className="drag-handle" aria-hidden="true">⠿</span></button>;
           })}
         </div></div>
         <div className="state-palette">
           <div className="state-palette-row">
-            <span className="state-palette-title">Session state colours</span>
-            {SESSION_STATE_ORDER.map((state) => <button key={state} type="button" className={`state-band-sample${editingState === state ? " is-editing" : ""}`} style={sessionStateChip(state, stateColors)} aria-expanded={editingState === state} onClick={() => setEditingState(editingState === state ? null : state)}>{sessionStateWord(state)}</button>)}
-            {Object.keys(stateColors).length > 0 && <button type="button" className="link-button" onClick={resetStateColors}>Reset all to default colours</button>}
+            <span className="state-palette-title">{t("Session state colours")}</span>
+            {SESSION_STATE_ORDER.map((state) => <button key={state} type="button" className={`state-band-sample${editingState === state ? " is-editing" : ""}`} style={sessionStateChip(state, stateColors)} aria-expanded={editingState === state} onClick={() => setEditingState(editingState === state ? null : state)}>{STATE_WORDS[state]}</button>)}
+            {Object.keys(stateColors).length > 0 && <button type="button" className="link-button" onClick={resetStateColors}>{t("Reset all to default colours")}</button>}
           </div>
-          {editingState ? <ColorPicker label={sessionStateWord(editingState)} value={stateColors[editingState] ?? sessionStateColor(editingState)} isDefault={!stateColors[editingState]} onPick={(color) => setStateColor(editingState, color)} onReset={() => setStateColor(editingState, null)} />
-            : <small className="state-palette-hint">Click a state to change its colour. The preview changes at once; the Deck after Save.</small>}
+          {editingState ? <ColorPicker label={STATE_WORDS[editingState]} value={stateColors[editingState] ?? sessionStateColor(editingState)} isDefault={!stateColors[editingState]} onPick={(color) => setStateColor(editingState, color)} onReset={() => setStateColor(editingState, null)} />
+            : <small className="state-palette-hint">{t("Click a state to change its colour. The preview changes at once; the Deck after Save.")}</small>}
           <div className="state-palette-row">
-            <label className="toggle-field compact-toggle"><input type="checkbox" checked={sessionLine} onChange={(event) => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, session_accent_line: event.target.checked } }))} /> Top line on Session keys</label>
-            <small className="state-palette-hint">Quota keys always keep their top line.</small>
+            <label className="toggle-field compact-toggle"><input type="checkbox" checked={sessionLine} onChange={(event) => setDeckOption("session_accent_line", event.target.checked)} /> {t("Top line on Session keys")}</label>
+            <small className="state-palette-hint">{t("Quota keys always keep their top line.")}</small>
           </div>
-          <div className="deck-legend"><span><i className="legend-dot editing-dot" /> Editing key</span><span><i className="legend-dot pinned-dot" /> Pinned Session</span></div>
+          <div className="deck-legend"><span><i className="legend-dot editing-dot" /> {t("Editing key")}</span><span><i className="legend-dot pinned-dot" /> {t("Pinned Session")}</span></div>
         </div>
       </section>
 
       <aside className="detail-column">
         <section className="panel key-editor">
-          <p>KEY CONFIGURATION</p>
-          <h2>Key {editingKey + 1}</h2>
-          <span className="editor-hint">Changes stay in this page until you choose Save. Clicking this preview never opens OpenChamber, Codex, or Claude Code.</span>
-          <label>Plugin
+          <p>{t("KEY CONFIGURATION")}</p>
+          <h2>{t("Key {n}", { n: editingKey + 1 })}</h2>
+          <span className="editor-hint">{t("Changes stay in this page until you choose Save. Clicking this preview never opens OpenChamber, Codex, or Claude Code.")}</span>
+          <label>{t("Plugin")}
             <select value={selectedBinding?.plugin ?? ""} onChange={(event) => changePlugin(event.target.value)}>
-              <option value="">No plugin (unassigned)</option>
-              {manifests.map((plugin) => <option key={plugin.id} value={plugin.id}>{plugin.name}</option>)}
+              <option value="">{t("No plugin (unassigned)")}</option>
+              <optgroup label={t("Agents (chats and their quota)")}>{manifests.filter((plugin) => AGENT_PLUGINS.has(plugin.id)).map((plugin) => <option key={plugin.id} value={plugin.id}>{t(plugin.name)}</option>)}</optgroup>
+              <optgroup label={t("Other quota sources")}>{manifests.filter((plugin) => !AGENT_PLUGINS.has(plugin.id)).map((plugin) => <option key={plugin.id} value={plugin.id}>{t(plugin.name)}</option>)}</optgroup>
             </select>
           </label>
-          <label>Display component
+          <label>{t("Display component")}
             <select disabled={!selectedManifest} value={selectedBinding?.component ?? ""} onChange={(event) => changeComponent(event.target.value)}>
-              {!selectedManifest && <option value="">Choose a plugin first</option>}
+              {!selectedManifest && <option value="">{t("Choose a plugin first")}</option>}
               {selectedManifest?.components.map((component) => <option key={component} value={component}>{displayName(component)}</option>)}
             </select>
           </label>
           {selectedBinding?.component === "session" && (
-            <label>Number of keys (span)
+            <label>{t("Number of keys (span)")}
               <input type="number" min={1} max={15 - editingKey} value={selectedBinding?.span ?? 1} onChange={(event) => changeSpan(Number(event.target.value))} />
             </label>
           )}
@@ -1248,21 +1635,21 @@ function App() {
             const savedAccount = typeof selectedBinding.action_params.account === "string" ? selectedBinding.action_params.account : "";
             const known = findAccount(quotaSnapshot, savedAccount);
             return <>
-              {(accounts.length > 0 || savedAccount) && <label>Account
+              {(accounts.length > 0 || savedAccount) && <label>{t("Account")}
                 <select value={known?.id ?? savedAccount} onChange={(event) => setQuotaOption("account", event.target.value)}>
-                  <option value="">Choose an account</option>
-                  {accounts.map((account) => <option key={account.id} value={account.id}>{account.title} · {account.id}{account.signals?.stale ? " (last seen)" : ""}</option>)}
-                  {savedAccount && !known && <option value={savedAccount}>{savedAccount} (not found right now)</option>}
+                  <option value="">{t("Choose an account")}</option>
+                  {accounts.map((account) => <option key={account.id} value={account.id}>{account.title} · {account.id}{account.signals?.stale ? ` ${t("(last seen)")}` : ""}</option>)}
+                  {savedAccount && !known && <option value={savedAccount}>{savedAccount} {t("(not found right now)")}</option>}
                 </select>
               </label>}
-              <label>Label
-                <input type="text" maxLength={16} placeholder={known?.title ?? `${displayName(selectedBinding.plugin)} quota`} value={typeof selectedBinding.action_params.label === "string" ? selectedBinding.action_params.label : ""} onChange={(event) => setQuotaOption("label", event.target.value)} />
+              <label>{t("Label")}
+                <input type="text" maxLength={16} placeholder={known?.title ?? pluginName(selectedBinding.plugin)} value={typeof selectedBinding.action_params.label === "string" ? selectedBinding.action_params.label : ""} onChange={(event) => setQuotaOption("label", event.target.value)} />
               </label>
-              <p className="editor-hint">Quota keys only display usage; pressing them does nothing.</p>
+              <p className="editor-hint">{t("Quota keys only display usage; pressing them does nothing.")}</p>
             </>;
-          })() : <label>Physical-key action
+          })() : <label>{t("Physical-key action")}
             <select disabled={!selectedManifest} value={selectedBinding?.action ?? ""} onChange={(event) => updateBinding({ action: event.target.value || null, action_params: {} })}>
-              <option value="">No action</option>
+              <option value="">{t("No action")}</option>
               {selectedManifest?.actions.map((action) => <option key={action} value={action}>{displayName(action)}</option>)}
             </select>
           </label>}
@@ -1270,34 +1657,34 @@ function App() {
             const owner = spanZones.get(editingKey) ?? selectedBinding;
             if (!owner?.plugin) return null;
             const fallback = PROVIDER_ACCENTS[owner.plugin] ?? "#8292aa";
-            const setAccent = (color: string | null) => updateConfig((current) => ({ ...current, buttons: current.buttons.map((item) => item.key_index === owner.key_index ? { ...item, accent: color } : item) }));
+            const setAccent = (color: string | null) => updateConfig((current) => ({ ...current, buttons: current.buttons.map((button) => button.key_index === owner.key_index ? { ...button, accent: color } : button) }));
             return <div className="accent-field">
-              <span className="field-label">Key colour</span>
-              <ColorPicker label="Key colour" value={owner.accent ?? fallback} isDefault={!owner.accent} onPick={setAccent} onReset={() => setAccent(null)} />
-              <small>The line on top of the key{owner.component === "session" ? ", above the state strip" : " and its title"}.{owner.key_index !== editingKey ? " Shared by every key of this Session zone." : ""}</small>
+              <span className="field-label">{t("Key colour")}</span>
+              <ColorPicker label={t("Key colour")} value={owner.accent ?? fallback} isDefault={!owner.accent} onPick={setAccent} onReset={() => setAccent(null)} />
+              <small>{owner.component === "session" ? t("The line on top of the key, above the state strip.") : t("The line on top of the key and its title.")}{owner.key_index !== editingKey ? ` ${t("Shared by every key of this Session zone.")}` : ""}</small>
             </div>;
           })()}
           <div className="binding-explainer">
             {selectedBinding?.plugin === "opencode" && selectedBinding.component === "session" ? <>
-              <b>Session zone (span {selectedBinding.span})</b><span>This key and {(selectedBinding.span ?? 1) - 1} key{(selectedBinding.span ?? 1) > 2 ? "s" : ""} to its right show live Sessions. Each physical press focuses that slot's Session in OpenChamber.</span>
-              <small>{selectedBinding.action === "select_session" ? "Physical press: focus this slot's Session in OpenChamber." : "Physical press: no Session focus action configured."}</small>
+              <b>{t("Session zone (span {n})", { n: selectedBinding.span })}</b><span>{<>This key and {(selectedBinding.span ?? 1) - 1} key{(selectedBinding.span ?? 1) > 2 ? "s" : ""} to its right show live Sessions. Each physical press focuses that slot's Session in OpenChamber.</>}</span>
+              <small>{selectedBinding.action === "select_session" ? t("Physical press: focus this slot's Session in OpenChamber.") : t("Physical press: no Session focus action configured.")}</small>
             </> : selectedBinding?.plugin === "codex" && selectedBinding.component === "session" ? <>
-              <b>Codex chat zone (span {selectedBinding.span})</b><span>This zone follows Codex's most recently active local chats, using live turn status and Codex-specific key styling.</span>
-              <small>{selectedBinding.action === "select_session" ? "Physical press: open this exact chat in the ChatGPT desktop app." : "Physical press: no Codex chat action configured."}</small>
+              <b>{t("Codex chat zone (span {n})", { n: selectedBinding.span })}</b><span>{t("This zone follows Codex's most recently active local chats, using live turn status and Codex-specific key styling.")}</span>
+              <small>{selectedBinding.action === "select_session" ? t("Physical press: open this exact chat in the ChatGPT desktop app.") : t("Physical press: no Codex chat action configured.")}</small>
             </> : selectedBinding?.plugin === "claude_code" && selectedBinding.component === "session" ? <>
-              <b>Claude Code Session zone (span {selectedBinding.span})</b><span>This zone follows open and recent Claude Code Sessions; open ones come first.</span>
-              <small>{selectedBinding.action === "select_session" ? "Physical press: resume this exact Session in a new console." : "Physical press: no Claude Code Session action configured."}</small>
-            </> : selectedBinding?.plugin ? <><b>{displayName(selectedBinding.component)}</b><span>This key renders the selected Plugin component when that Plugin supplies it.</span><small>Physical action: {displayName(selectedBinding.action)}</small></> : <><b>Unassigned key</b><span>Choose a Plugin and Component to define what this key displays.</span><small>No physical action is configured.</small></>}
+              <b>{t("Claude Code Session zone (span {n})", { n: selectedBinding.span })}</b><span>{t("This zone follows open and recent Claude Code Sessions; open ones come first.")}</span>
+              <small>{selectedBinding.action === "select_session" ? t("Physical press: resume this exact Session in a new console.") : t("Physical press: no Claude Code Session action configured.")}</small>
+            </> : selectedBinding?.plugin ? <><b>{displayName(selectedBinding.component)}</b><span>{t("This key renders the selected Plugin component when that Plugin supplies it.")}</span><small>{t("Physical action: {action}", { action: displayName(selectedBinding.action) })}</small></> : <><b>{t("Unassigned key")}</b><span>{t("Choose a Plugin and Component to define what this key displays.")}</span><small>{t("No physical action is configured.")}</small></>}
           </div>
-          {selectedBinding?.component === "session" && <p className="pin-hint">Short-press the physical key to open its Session. Hold it for 2 seconds to pin that Session to this slot; hold it again to unpin. An orange frame marks a pinned slot.</p>}
+          {selectedBinding?.component === "session" && <p className="pin-hint">{t("Short-press the physical key to open its Session. Hold it for 2 seconds to pin that Session to this slot; hold it again to unpin. An orange frame marks a pinned slot.")}</p>}
           {selectedBinding?.plugin && selectedBinding.component === "session" && isZoneParent(editingKey) && (selectedBinding.span ?? 1) === 1 && (() => {
             const assigned = selectedBinding.session_id ? selectedProviderSessions.find((session) => session.id === selectedBinding.session_id) : null;
             return <div className="session-picker">
               <div className="session-picker-head">
-                <p>SESSION ASSIGNMENT</p>
-                {selectedBinding.session_id && <button type="button" className="ghost-btn" onClick={() => updateBinding({ session_id: null })}>{assigned ? "Clear session" : "Session not found — clear"}</button>}
+                <p>{t("SESSION ASSIGNMENT")}</p>
+                {selectedBinding.session_id && <button type="button" className="ghost-btn" onClick={() => updateBinding({ session_id: null })}>{assigned ? t("Clear session") : t("Session not found — clear")}</button>}
               </div>
-              {selectedBinding.session_id && !assigned && <p className="session-not-found">Session not found. It may have closed. Clear the assignment to pick a new one.</p>}
+              {selectedBinding.session_id && !assigned && <p className="session-not-found">{t("Session not found. It may have closed. Clear the assignment to pick a new one.")}</p>}
               <div className="session-list">
                 {selectedProviderSessions.map((session) => (
                   <button
@@ -1308,44 +1695,67 @@ function App() {
                   >
                     <span className="session-state-dot" style={{ background: sessionStateColor(session.state) }} />
                     <span className="session-item-main">
-                      <strong>{session.title || "Untitled session"}</strong>
-                      <small>{session.project ?? "No project"}</small>
+                      <strong>{session.title || t("Untitled session")}</strong>
+                      <small>{session.project ?? t("No project")}</small>
                     </span>
-                    <em className="state-chip" style={sessionStateChip(session.state, stateColors)}>{sessionStateWord(session.state)}</em>
+                    <em className="state-chip" style={sessionStateChip(session.state, stateColors)}>{stateText(session.state)}</em>
                   </button>
                 ))}
-                {selectedProviderSessions.length === 0 && <p className="session-list-empty">No live {displayName(selectedBinding.plugin)} sessions available.</p>}
+                {selectedProviderSessions.length === 0 && <p className="session-list-empty">{t("No live {name} sessions available.", { name: displayName(selectedBinding.plugin) })}</p>}
               </div>
             </div>;
           })()}
         </section>
       </aside>
     </div> : <section className="configuration-page" role="tabpanel" aria-label="Bridge configuration">
-      <div className="configuration-heading">
-        <p>BRIDGE CONFIGURATION</p>
-        <h2>Hardware and providers</h2>
-        <span>Connection settings and usage data live here, separate from the physical button layout.</span>
-      </div>
-      <div className="configuration-grid">
-        <section className="panel device-card configuration-card">
-          <p>PHYSICAL DECK</p>
-          <h2>Stream Deck MK.2</h2>
-          <div><b>{status?.device.connected ? "Ready" : "Waiting"}</b><span>{status?.device.detail || "Checking hardware"}</span></div>
-          <label>Brightness<input type="range" min="0" max="100" value={config?.stream_deck.brightness ?? 40} onChange={(event) => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, brightness: Number(event.target.value) } }))} /></label>
-          <label>Quota keys show
-            <select value={config?.stream_deck.quota_display ?? "remaining"} onChange={(event) => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, quota_display: event.target.value as QuotaDisplay } }))}>
-              <option value="remaining">What is left (full green bar = plenty)</option>
-              <option value="used">What is used</option>
-            </select>
-          </label>
-        </section>
-        <OpenCodeCard config={config} snapshot={snapshots.opencode} updateConfig={updateConfig} />
-        <CodexCard config={config} snapshot={snapshots.codex} updateConfig={updateConfig} />
-        <ClaudeCodeCard config={config} snapshot={snapshots.claude_code} updateConfig={updateConfig} setup={claudeSetup} onSetupChange={changeClaudeSetup} />
-        <OllamaQuotaCard config={config} snapshot={snapshots.ollama_quota} updateConfig={updateConfig} />
-        <HttpQuotaCard config={config} snapshot={snapshots.http_quota} updateConfig={updateConfig} />
-      </div>
+      <section className="panel hardware-bar" aria-label="Stream Deck">
+        <div className="hardware-status">
+          <i className={`service-dot ${status?.device.connected ? "dot-ok" : "dot-off"}`} aria-hidden="true" />
+          <div><b>Stream Deck MK.2</b><span>{status?.device.connected ? t("Ready") : tDetail(status?.device.detail) || t("Waiting")}</span></div>
+        </div>
+        <label>{t("Brightness")}<input type="range" min="0" max="100" value={config?.stream_deck.brightness ?? 40} onChange={(event) => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, brightness: Number(event.target.value) } }))} /></label>
+        <label>{t("Quota keys show")}
+          <select value={config?.stream_deck.quota_display ?? "remaining"} onChange={(event) => updateConfig((current) => ({ ...current, stream_deck: { ...current.stream_deck, quota_display: event.target.value as QuotaDisplay } }))}>
+            <option value="remaining">{t("What is left (full green bar = plenty)")}</option>
+            <option value="used">{t("What is used")}</option>
+          </select>
+        </label>
+      </section>
+      <section className="panel services-panel" aria-labelledby="services-title">
+        <div className="services-head">
+          <div><h2 id="services-title">{t("Connected services")}</h2><span>{t("Click a service to see its settings. Keys stay in the local Bridge and are never shown here.")}</span></div>
+          <button ref={addButtonRef} type="button" className="primary" onClick={() => setAdding(true)}>{t("+ Add service")}</button>
+        </div>
+        {services.length > 0 && <div className="service-legend" aria-hidden="true">
+          <span className="status-ok"><i className="service-dot" />{t("Working")}</span>
+          <span className="status-loading"><i className="service-dot" />{t("Reading…")}</span>
+          <span className="status-stale"><i className="service-dot" />{t("Last seen, not current")}</span>
+          <span className="status-error"><i className="service-dot" />{t("Needs attention")}</span>
+          <span className="status-pending"><i className="service-dot" />{t("Starts after Save")}</span>
+        </div>}
+        {services.length === 0 ? <div className="services-empty">
+          <h3>{t("No services connected yet")}</h3>
+          <p>{t("Connect the AI tools you use; their chats and quota can then show on the Deck.")}</p>
+          <button type="button" className="primary" onClick={() => setAdding(true)}>{t("+ Connect your first service")}</button>
+          <div className="quick-add"><span>{t("Common:")}</span>{serviceChoices.filter((choice) => choice.group === "agent" && !choice.connected).map((choice) => <button key={choice.id} type="button" onClick={() => pickService(choice)}>{t(choice.name)}</button>)}</div>
+        </div> : SERVICE_GROUPS.map(([group, label]) => {
+          const items = services.filter((item) => item.group === group);
+          if (!items.length) return null;
+          return <div key={group} className="service-group">
+            <h3 className="service-group-label">{t(label)}</h3>
+            <ul className="service-list" aria-label={t(label)}>
+              {items.map((item) => <ServiceRow key={item.key} item={item} open={openServices.has(item.key)} onToggle={() => toggleService(item.key)} />)}
+            </ul>
+          </div>;
+        })}
+      </section>
+      {adding && <AddServiceDialog choices={serviceChoices} onPick={pickService} onClose={() => { setAdding(false); addButtonRef.current?.focus(); }} />}
     </section>}
+    {dirty && <div className="unsaved-bar" role="status">
+      <span>{services.some((item) => item.dirty || item.leaving) ? t("{n} unsaved change(s). Save to apply them to the Deck.", { n: services.filter((item) => item.dirty || item.leaving).length }) : t("You have unsaved changes. Save to apply them to the Deck.")}</span>
+      {confirmDiscard ? <div><span>{t("Drop every unsaved change?")}</span><button type="button" className="danger" onClick={discard}>{t("Discard")}</button><button type="button" onClick={() => setConfirmDiscard(false)}>{t("Cancel")}</button></div>
+        : <div><button type="button" onClick={() => setConfirmDiscard(true)}>{t("Discard")}</button><button type="button" className="primary" onClick={() => void save()}>{t("Save changes")}</button></div>}
+    </div>}
   </main>;
 }
 

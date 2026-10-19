@@ -37,5 +37,7 @@ def test_provider_and_quota_settings_have_a_dedicated_configuration_tab() -> Non
     assert '<CodexCard config={config}' in source
     assert '<ClaudeCodeCard config={config}' in source
     assert '<OllamaQuotaCard config={config}' in source
-    assert "Enable Ollama Cloud quota provider" in source
+    # Services in use are listed; the rest are offered by "+ Add service".
+    assert "Connected services" in source
+    assert "<AddServiceDialog" in source
     assert 'aria-label="Bridge configuration"' in source
