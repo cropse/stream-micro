@@ -218,3 +218,21 @@ select:disabled { cursor: not-allowed; opacity: .6; }
 .usage-window legend { color: #9eb0c9; font-size: 12px; padding: 0 4px; }
 .usage-source { gap: 10px; }
 .usage-footer { justify-items: start; }
+.setup-check { display: grid; gap: 10px; padding: 14px; border: 1px solid #2a3a53; border-radius: 12px; background: #0f1a2b; }
+.setup-check > * { min-width: 0; }
+.setup-head { display: grid; gap: 2px; }
+.setup-head small { color: #8292aa; font-size: 12px; }
+.setup-lines { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.setup-line { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 6px 10px; align-items: start; padding: 10px; border-radius: 10px; background: #111d30; }
+.setup-line.is-ok { background: #10241a; }
+.setup-wrong_port, .setup-partial, .setup-other { background: #2a2214; }
+.setup-skipped { opacity: .7; }
+.setup-icon { font-size: 16px; line-height: 1.4; }
+.setup-text { display: grid; gap: 2px; min-width: 0; }
+.setup-text span { color: #dce6f6; font-size: 13px; }
+.setup-text small { color: #8292aa; font-size: 12px; }
+.setup-actions { grid-column: 2; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.setup-actions .link-button { font-size: 13px; }
+button.small { padding: 5px 10px; font-size: 12px; min-height: 0; }
+.fix-note { margin: 0; color: #ff9aa2; font-size: 12px; }
+.setup-snippet { max-width: 100%; max-height: 220px; overflow: auto; padding: 10px; border-radius: 8px; background: #0b1220; color: #c9d4e3; font-size: 11px; white-space: pre; }

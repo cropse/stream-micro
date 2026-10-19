@@ -110,8 +110,8 @@ type BridgeStatus = {
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api/${path}`, {
-    headers: { "content-type": "application/json" },
     ...options,
+    headers: { "content-type": "application/json" },
   });
   if (!response.ok) {
     throw new Error((await response.json().catch(() => ({}))).detail || "Bridge unavailable");
@@ -308,10 +308,114 @@ function CodexCard({ config, snapshot, updateConfig }: {
   </section>;
 }
 
-function ClaudeCodeCard({ config, snapshot, updateConfig }: {
+type SetupState = "missing" | "other" | "wrong_port" | "partial" | "ours";
+type ClaudeSetup = {
+  settings_path: string;
+  error?: string;
+  hooks?: { state: SetupState; events: string[] };
+  statusline?: { state: SetupState; chained: boolean };
+  hook_command?: string;
+  statusline_command?: string;
+  last_hook_at?: number | null;
+  last_statusline_at?: number | null;
+  port: number;
+};
+const HOOK_EVENT_NAMES = ["SessionStart", "UserPromptSubmit", "PermissionRequest", "Notification", "Stop", "StopFailure", "SessionEnd"];
+
+function sinceText(at: number | null | undefined) {
+  if (!at) return "";
+  const minutes = Math.max(0, Math.round((Date.now() / 1000 - at) / 60));
+  if (minutes < 1) return "just now";
+  return minutes < 60 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
+}
+
+// Parts someone chose not to install (kept in this browser): no more reminders.
+const SETUP_SKIP_KEY = "stream-micro.claude-setup-skipped";
+function readSkipped(): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(SETUP_SKIP_KEY) ?? "[]");
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function writeSkipped(parts: string[]) {
+  try { localStorage.setItem(SETUP_SKIP_KEY, JSON.stringify(parts)); } catch { /* private window */ }
+}
+
+// Whether the quota status line and the WAIT hook are installed and reaching
+// this Bridge; one click installs, fixes or removes them.
+function ClaudeSetupCheck({ setup }: { setup: ClaudeSetup | null }) {
+  const [skipped, setSkipped] = useState<string[]>(readSkipped);
+  if (!setup) return null;
+  if (setup.error) return <div className="setup-check"><p className="fix-note">{setup.error}</p></div>;
+  const skip = (part: string, on: boolean) => {
+    const next = on ? [...new Set([...skipped, part])] : skipped.filter((item) => item !== part);
+    writeSkipped(next);
+    setSkipped(next);
+  };
+  const line = (part: "statusline" | "hooks") => {
+    const state = (part === "statusline" ? setup.statusline?.state : setup.hooks?.state) ?? "missing";
+    const last = part === "statusline" ? setup.last_statusline_at : setup.last_hook_at;
+    const title = part === "statusline" ? "Quota report (status line)" : "Approval reminder WAIT (hook)";
+    const purpose = part === "statusline" ? "Lets Claude's 5-hour and weekly quota show on the Deck." : "Lets Session keys show WAIT while Claude waits for your approval.";
+    const installed = state === "ours" || state === "wrong_port" || state === "partial";
+    if (!installed && skipped.includes(part)) {
+      return <li className="setup-line setup-skipped">
+        <span className="setup-icon" aria-hidden="true">➖</span>
+        <div className="setup-text"><b>{title}</b><span>Not wanted; no reminders.</span><small>{purpose}</small></div>
+        <div className="setup-actions"><button type="button" className="link-button" onClick={() => skip(part, false)}>I want it after all</button></div>
+      </li>;
+    }
+    let icon = "⬜";
+    let text = "Not added yet: copy it from below.";
+    if (state === "other") {
+      icon = "⚠️";
+      text = "Claude Code already uses another status line; ours would replace it.";
+    } else if (state === "wrong_port") {
+      icon = "⛔";
+      text = `Set to another port; this Bridge listens on ${setup.port}. Copy the commands below again.`;
+    } else if (state === "partial") {
+      icon = "⚠️";
+      text = "Only some of the hook events are there; copy the hooks below again.";
+    } else if (state === "ours") {
+      icon = last ? "✅" : "⏳";
+      text = last ? `Working, last report ${sinceText(last)}` : "Added. Waiting for the first report: start a new Claude Code session.";
+      if (part === "statusline" && setup.statusline?.chained) text += " (after your own status line)";
+    }
+    return <li className={`setup-line setup-${state}${state === "ours" && last ? " is-ok" : ""}`}>
+      <span className="setup-icon" aria-hidden="true">{icon}</span>
+      <div className="setup-text"><b>{title}</b><span>{text}</span><small>{purpose}</small></div>
+      <div className="setup-actions">
+        {!installed && <button type="button" className="link-button" onClick={() => skip(part, true)}>I don't need this</button>}
+      </div>
+    </li>;
+  };
+  const snippet = JSON.stringify({
+    statusLine: { type: "command", command: setup.statusline_command },
+    hooks: Object.fromEntries(HOOK_EVENT_NAMES.map((event) => [event, [{ hooks: [{ type: "command", command: setup.hook_command, timeout: 3 }] }]])),
+  }, null, 2);
+  const missing = ["statusline", "hooks"].some((part) => {
+    const state = (part === "statusline" ? setup.statusline?.state : setup.hooks?.state) ?? "missing";
+    return state !== "ours" && !skipped.includes(part);
+  });
+  return <div className="setup-check">
+    <div className="setup-head"><b>Claude Code setup</b><small>Both run small scripts from this Bridge while Claude Code works; they only report to this computer.</small></div>
+    <ul className="setup-lines">{line("statusline")}{line("hooks")}</ul>
+    <details className="ollama-advanced" open={missing}>
+      <summary>Add them to Claude Code</summary>
+      <p className="ollama-hint">Add these to {setup.settings_path} (merge with what is there: keep your own hooks and settings), then start a new Claude Code session.</p>
+      <pre className="setup-snippet">{snippet}</pre>
+      <button type="button" className="small" onClick={() => void navigator.clipboard?.writeText(snippet)}>Copy</button>
+    </details>
+  </div>;
+}
+
+function ClaudeCodeCard({ config, snapshot, updateConfig, setup }: {
   config: Config | null;
   snapshot?: PluginSnapshot;
   updateConfig: (change: (current: Config) => Config) => void;
+  setup: ClaudeSetup | null;
 }) {
   const pluginConfig = config?.plugins?.claude_code as ClaudeCodeConfig | undefined;
   const setField = (field: keyof ClaudeCodeConfig, value: string | number | boolean | null) => {
@@ -327,6 +431,7 @@ function ClaudeCodeCard({ config, snapshot, updateConfig }: {
     <p>CLAUDE CODE</p>
     <h2>Sessions &amp; quota</h2>
     <label className="toggle-field claude-code-toggle"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setField("enabled", event.target.checked)} /> Enable Claude Code provider</label>
+    <ClaudeSetupCheck setup={setup} />
     <details className="ollama-advanced">
       <summary>Advanced settings</summary>
       <label>Claude executable
@@ -345,7 +450,7 @@ function ClaudeCodeCard({ config, snapshot, updateConfig }: {
     {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
     <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>recent Claude Code Sessions available to button zones</span></div>
     {snapshot?.signals && <UsageBars signals={snapshot.signals} generic display={config?.stream_deck.quota_display ?? "remaining"} />}
-    <p className="provider-note">Session state comes from the running Claude process and its transcript, so it works without setup; the companion hook adds an exact WAIT when Claude needs your approval. SUB means the turn ended but subagents or other agents still work for it. Quota appears after Claude Code's status line receives its first API response.</p>
+    <p className="provider-note">Session state comes from the running Claude process and its transcript, so it works without setup; the companion hook (above) adds an exact WAIT when Claude needs your approval. SUB means the turn ended but subagents or other agents still work for it. Quota appears after Claude Code's status line receives its first API response.</p>
   </section>;
 }
 
@@ -548,6 +653,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<"buttons" | "configuration">("buttons");
   const [config, setConfig] = useState<Config | null>(null);
   const [snapshots, setSnapshots] = useState<Record<string, PluginSnapshot>>({});
+  const [claudeSetup, setClaudeSetup] = useState<ClaudeSetup | null>(null);
   const [manifests, setManifests] = useState<PluginManifest[]>([]);
   const [status, setStatus] = useState<BridgeStatus | null>(null);
   const [editingKey, setEditingKey] = useState(0);
@@ -570,6 +676,7 @@ function App() {
       ]);
       if (replaceLocalConfig || !dirtyRef.current) setConfig(nextConfig);
       setSnapshots(nextSnapshots);
+      api<ClaudeSetup>("claude-code/setup").then(setClaudeSetup, () => setClaudeSetup(null));
       setManifests(nextManifests);
       setStatus(nextStatus);
       if (!dirtyRef.current) setNotice("");
@@ -1094,7 +1201,7 @@ function App() {
         </section>
         <OpenCodeCard config={config} snapshot={snapshots.opencode} updateConfig={updateConfig} />
         <CodexCard config={config} snapshot={snapshots.codex} updateConfig={updateConfig} />
-        <ClaudeCodeCard config={config} snapshot={snapshots.claude_code} updateConfig={updateConfig} />
+        <ClaudeCodeCard config={config} snapshot={snapshots.claude_code} updateConfig={updateConfig} setup={claudeSetup} />
         <OllamaQuotaCard config={config} snapshot={snapshots.ollama_quota} updateConfig={updateConfig} />
         <HttpQuotaCard config={config} snapshot={snapshots.http_quota} updateConfig={updateConfig} />
       </div>

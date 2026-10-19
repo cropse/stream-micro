@@ -92,6 +92,12 @@ transcripts and hooks, and closed Sessions are not marked `OFF`.
 Sessions hosted by the Claude desktop app are left out: they are not terminal
 Sessions, and resuming one in a console would fork it.
 
+The Dashboard's Claude Code card checks both companions (the quota status
+line and the `WAIT` hook): whether they are in `~/.claude/settings.json`,
+whether they point at this Bridge's port, and when each last reported. It
+shows the exact entries to add for this Bridge's port, ready to copy; either
+part can be declined. It only reads the file.
+
 The bundled companion hook adds exact lifecycle events, notably `WAIT` when
 Claude asks for approval:
 

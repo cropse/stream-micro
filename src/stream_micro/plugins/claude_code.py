@@ -294,6 +294,8 @@ class ClaudeCodePlugin:
         self._history_key: tuple[int, int] | None = None
         self._history: tuple[ClaudeHistorySession, ...] = ()
         self._last_hook_at: float | None = None
+        # When the status-line command last reported (seconds), for the setup check.
+        self._statusline_at: float | None = None
         self._quota_signals: dict[str, str | float | int | None] = {}
         # Front end that wrote each transcript, once known (it never changes).
         # Per transcript: the file version scanned and the front end found, if any.
@@ -358,6 +360,8 @@ class ClaudeCodePlugin:
         ):
             raise ClaudeCodeError("Claude Code quota update has an invalid session_id")
         signals = parse_claude_rate_limits(payload)
+        with self._lock:
+            self._statusline_at = self._clock()
         if signals:
             with self._lock:
                 self._quota_signals = signals
@@ -366,6 +370,13 @@ class ClaudeCodePlugin:
             "session_id": session_id if isinstance(session_id, str) else None,
             "quota_updated": bool(signals),
         }
+
+    def setup_activity(self) -> dict[str, float | None]:
+        """When the hook and the status line last reached the Bridge (epoch seconds)."""
+
+        with self._lock:
+            hook = self._last_hook_at / 1000 if self._last_hook_at is not None else None
+            return {"last_hook_at": hook, "last_statusline_at": self._statusline_at}
 
     def _history_sessions(self) -> tuple[ClaudeHistorySession, ...]:
         try:

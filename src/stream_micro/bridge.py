@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from . import claude_setup
 from .control_config import (
     ButtonBinding,
     ControlConfig,
@@ -560,6 +561,25 @@ class BridgeService:
         if not isinstance(plugin, ClaudeCodePlugin):
             raise BridgeError("Claude Code plugin is not enabled")
         return plugin.handle_quota(payload)
+
+    def _claude_settings_path(self) -> Path:
+        home = self.config.plugins.get("claude_code", {}).get("claude_home")
+        base = (
+            Path(home).expanduser() if isinstance(home, str) and home else Path.home() / ".claude"
+        )
+        return base / "settings.json"
+
+    def claude_setup_status(self) -> dict[str, Any]:
+        """What of the Claude Code companion is installed, and what has reached us."""
+
+        port = self.config.bridge.port
+        try:
+            status: dict[str, Any] = claude_setup.inspect(self._claude_settings_path(), port)
+        except claude_setup.ClaudeSetupError as exc:
+            status = {"settings_path": str(self._claude_settings_path()), "error": str(exc)}
+        plugin = self.plugins.get("claude_code")
+        activity = plugin.setup_activity() if isinstance(plugin, ClaudeCodePlugin) else {}
+        return {**status, **activity, "port": port}
 
     def invoke(self, plugin_id: str, action: str, params: dict[str, Any]) -> Any:
         plugin = self._plugin(plugin_id)

@@ -121,6 +121,10 @@ def create_app(config_path: Path | str, *, service: BridgeService | None = None)
         except (BridgeError, ClaudeCodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @app.get("/api/claude-code/setup")
+    def get_claude_setup() -> dict[str, Any]:
+        return service.claude_setup_status()
+
     @app.post("/api/hooks/claude-code/quota")
     def post_claude_code_quota(data: dict[str, Any]) -> dict[str, str | bool | None]:
         """Accept quota fields from a local Claude Code status-line command."""
