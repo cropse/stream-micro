@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
-import { locale, t, tDetail } from "./i18n";
+import { getLang, isZh, locale, setLang, t, tDetail, type Lang } from "./i18n";
 
 type Button = {
   key_index: number;
@@ -373,10 +373,18 @@ function OllamaQuotaCard({ config, snapshot, updateConfig }: {
           onChange={(event) => setField("cookie_value", event.target.value)}
         />
       </label>
-      <p className="ollama-hint">{pluginConfig?.cookie_configured ? t("The saved cookie stays in the local Bridge and is never returned to this page.") : <>Sign in at ollama.com, open DevTools → Application → Cookies, copy the <code>__Secure-session</code> value.</>}</p>
+      <p className="ollama-hint">{pluginConfig?.cookie_configured ? t("The saved cookie stays in the local Bridge and is never returned to this page.") : isZh() ? <>登入 ollama.com，打開開發者工具 → Application → Cookies，複製 <code>__Secure-session</code> 的值。</> : <>Sign in at ollama.com, open DevTools → Application → Cookies, copy the <code>__Secure-session</code> value.</>}</p>
       <details className="ollama-advanced">
         <summary>{t("How to get the cookie")}</summary>
-        {<>
+        {isZh() ? <>
+        <ol className="cookie-steps">
+          <li>用 Chrome 或 Edge 登入 <code>ollama.com</code>（要顯示額度的那個帳號）。</li>
+          <li>按 <code>F12</code> 打開開發者工具，選上方的 <b>Application</b> 分頁（Firefox 是 <b>Storage</b>）。</li>
+          <li>左邊 <b>Cookies</b> 底下點 <code>https://ollama.com</code>。</li>
+          <li>找到 <code>__Secure-session</code>，複製它的 <b>Value</b>，貼到上面再按「儲存變更」。</li>
+          <li>同一列的 <b>Expires / Max-Age</b> 就是它能用到什麼時候。在 ollama.com 登出會讓它提早失效；失效時這張卡片會提示你，再貼一次新的就好。</li>
+        </ol>
+        </> : <>
         <ol className="cookie-steps">
           <li>Sign in at <code>ollama.com</code> in Chrome or Edge with the account to show.</li>
           <li>Press <code>F12</code> to open DevTools and choose the <b>Application</b> tab (in Firefox: <b>Storage</b>).</li>
@@ -594,7 +602,7 @@ function UsageSourceCards({ config, snapshot, updateConfig, billing, only, saved
         <label>{t("Key from environment variable")}
           <input type="text" placeholder={t("Optional, e.g. OPENROUTER_API_KEY")} value={source.api_key_env ?? ""} onChange={(event) => setSource(index, { api_key_env: event.target.value || null })} />
         </label>
-        <p className="ollama-hint">{<>{custom ? "Where the numbers are in the JSON reply" : "Rows replace the preset's rows when added"}: paths like <code>data.limit</code>, <code>items.0.used</code> or <code>limits[type=TOKENS,unit=3].percentage</code>. Reset times may be ISO text or epoch seconds/milliseconds.</>}</p>
+        <p className="ollama-hint">{isZh() ? <>{custom ? "數字在 JSON 回應裡的位置" : "新增的列會取代範本的列"}：路徑寫法例如 <code>data.limit</code>、<code>items.0.used</code> 或 <code>limits[type=TOKENS,unit=3].percentage</code>。重置時間可以是 ISO 文字，或 epoch 秒／毫秒。</> : <>{custom ? "Where the numbers are in the JSON reply" : "Rows replace the preset's rows when added"}: paths like <code>data.limit</code>, <code>items.0.used</code> or <code>limits[type=TOKENS,unit=3].percentage</code>. Reset times may be ISO text or epoch seconds/milliseconds.</>}</p>
         {[0, 1].map((at) => {
           const window = windows[at];
           if (!window) {
@@ -980,6 +988,13 @@ function App() {
   const [notice, setNotice] = useState(t("Connecting to local Bridge..."));
   const [dragSource, setDragSource] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const [lang, setLangState] = useState<Lang>(getLang());
+  const switchLang = () => {
+    const next: Lang = lang === "en" ? "zh-TW" : "en";
+    setLang(next);
+    setLangState(next);
+  };
+  useEffect(() => { document.documentElement.lang = lang; }, [lang]);
 
   const refresh = async (replaceLocalConfig = false) => {
     if (refreshInFlightRef.current) return;
@@ -1514,6 +1529,7 @@ function App() {
       <div className="brand"><span className="brand-mark">DB</span><div><p>{t("LOCAL CONTROL SURFACE")}</p><h1>Deck Bridge</h1></div></div>
       <div className="topbar-right">
         <span className={`connection ${status?.device.connected ? "online" : "offline"}`}><i /> {status?.device.connected ? t("MK.2 connected") : t("Deck offline")}</span>
+        <button type="button" className="lang-switch" title={t("Switch language")} aria-label={t("Switch language")} onClick={switchLang}>{lang === "en" ? "中文" : "EN"}</button>
         <button onClick={() => void refresh(true)}>{t("Refresh")}</button>
         <button className="primary" disabled={!dirty} onClick={() => void save()}>{dirty ? t("Save changes") : t("Saved")}</button>
       </div>
@@ -1666,7 +1682,7 @@ function App() {
           })()}
           <div className="binding-explainer">
             {selectedBinding?.plugin === "opencode" && selectedBinding.component === "session" ? <>
-              <b>{t("Session zone (span {n})", { n: selectedBinding.span })}</b><span>{<>This key and {(selectedBinding.span ?? 1) - 1} key{(selectedBinding.span ?? 1) > 2 ? "s" : ""} to its right show live Sessions. Each physical press focuses that slot's Session in OpenChamber.</>}</span>
+              <b>{t("Session zone (span {n})", { n: selectedBinding.span })}</b><span>{isZh() ? t("This key and the keys to its right show live Sessions. Each physical press focuses that slot's Session in OpenChamber.") : <>This key and {(selectedBinding.span ?? 1) - 1} key{(selectedBinding.span ?? 1) > 2 ? "s" : ""} to its right show live Sessions. Each physical press focuses that slot's Session in OpenChamber.</>}</span>
               <small>{selectedBinding.action === "select_session" ? t("Physical press: focus this slot's Session in OpenChamber.") : t("Physical press: no Session focus action configured.")}</small>
             </> : selectedBinding?.plugin === "codex" && selectedBinding.component === "session" ? <>
               <b>{t("Codex chat zone (span {n})", { n: selectedBinding.span })}</b><span>{t("This zone follows Codex's most recently active local chats, using live turn status and Codex-specific key styling.")}</span>

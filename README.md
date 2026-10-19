@@ -3,6 +3,9 @@
 Local Agent Control Surface for **Elgato Stream Deck MK.2 only** (15 keys,
 5 × 3). It discovers a locally running OpenCode Server, renders the first five
 Sessions on the first row, and provides a local Dashboard at the same address.
+The Dashboard speaks English or Traditional Chinese (the 中文 / EN button in
+the top bar; it starts in Chinese for Traditional Chinese browsers and
+remembers the choice in this browser).
 
 ## Run
 
