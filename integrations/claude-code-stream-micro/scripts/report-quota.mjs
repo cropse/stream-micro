@@ -29,7 +29,33 @@ const formatPercent = (window) => {
 const fiveHour = formatPercent(input.rate_limits?.five_hour);
 const sevenDay = formatPercent(input.rate_limits?.seven_day);
 
-console.log(`CLAUDE · 5H ${fiveHour} · 7D ${sevenDay}`);
+// Chained after another status line: that one draws the line, this one only
+// reports quota. Its command is kept in a file the Bridge wrote when chaining.
+let drawn = false;
+const chainFile = argument("stream-micro-next") ?? process.env.STREAM_MICRO_STATUSLINE_NEXT_FILE;
+if (chainFile) {
+  try {
+    const { readFileSync } = await import("node:fs");
+    const { spawnSync } = await import("node:child_process");
+    const saved = JSON.parse(readFileSync(chainFile, "utf8"));
+    const command = saved.statusLine?.command ?? saved.command;
+    if (typeof command === "string" && command) {
+      const options = { input: Buffer.concat(chunks), encoding: "utf8", timeout: 4000, windowsHide: true };
+      // The shell Claude Code itself uses (Git Bash on Windows sets SHELL);
+      // without one, the system shell.
+      const result = process.env.SHELL
+        ? spawnSync(process.env.SHELL, ["-c", command], options)
+        : spawnSync(command, { ...options, shell: true });
+      if (result.status === 0 && typeof result.stdout === "string") {
+        process.stdout.write(result.stdout);
+        drawn = true;
+      }
+    }
+  } catch {
+    // Fall back to our own line.
+  }
+}
+if (!drawn) console.log(`CLAUDE · 5H ${fiveHour} · 7D ${sevenDay}`);
 
 const quotaWindow = (window) => {
   if (!window || typeof window !== "object") return undefined;

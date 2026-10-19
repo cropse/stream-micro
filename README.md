@@ -94,9 +94,12 @@ Sessions, and resuming one in a console would fork it.
 
 The Dashboard's Claude Code card checks both companions (the quota status
 line and the `WAIT` hook): whether they are in `~/.claude/settings.json`,
-whether they point at this Bridge's port, and when each last reported. It
-shows the exact entries to add for this Bridge's port, ready to copy; either
-part can be declined. It only reads the file.
+whether they point at this Bridge's port, and when each last reported. One
+click installs, fixes or removes them for this Bridge's port. Only entries
+that run the bundled scripts are touched, the file is backed up first, and
+another tool's status line is kept unless you chain ours after it (it still
+draws the line) or replace it. Either part can be declined. The endpoint that
+writes the file accepts only the Bridge's own page.
 
 The bundled companion hook adds exact lifecycle events, notably `WAIT` when
 Claude asks for approval:

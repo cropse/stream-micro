@@ -111,7 +111,7 @@ type BridgeStatus = {
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api/${path}`, {
     ...options,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...(options?.headers ?? {}) },
   });
   if (!response.ok) {
     throw new Error((await response.json().catch(() => ({}))).detail || "Bridge unavailable");
@@ -320,6 +320,7 @@ type ClaudeSetup = {
   last_statusline_at?: number | null;
   port: number;
 };
+type SetupChange = { action: "install" | "remove"; parts: string[]; replace_statusline?: boolean; chain_statusline?: boolean };
 const HOOK_EVENT_NAMES = ["SessionStart", "UserPromptSubmit", "PermissionRequest", "Notification", "Stop", "StopFailure", "SessionEnd"];
 
 function sinceText(at: number | null | undefined) {
@@ -345,7 +346,10 @@ function writeSkipped(parts: string[]) {
 
 // Whether the quota status line and the WAIT hook are installed and reaching
 // this Bridge; one click installs, fixes or removes them.
-function ClaudeSetupCheck({ setup }: { setup: ClaudeSetup | null }) {
+function ClaudeSetupCheck({ setup, onChange }: { setup: ClaudeSetup | null; onChange: (body: SetupChange) => Promise<string | null> }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<string[]>(readSkipped);
   if (!setup) return null;
   if (setup.error) return <div className="setup-check"><p className="fix-note">{setup.error}</p></div>;
@@ -353,6 +357,13 @@ function ClaudeSetupCheck({ setup }: { setup: ClaudeSetup | null }) {
     const next = on ? [...new Set([...skipped, part])] : skipped.filter((item) => item !== part);
     writeSkipped(next);
     setSkipped(next);
+  };
+  const run = async (body: SetupChange) => {
+    setBusy(true);
+    setConfirmRemove(null);
+    const error = await onChange(body);
+    setBusy(false);
+    setMessage(error ? { ok: false, text: error } : { ok: true, text: body.action === "install" ? `Written to ${setup.settings_path} (the old file is backed up). Start a new Claude Code session for it to take effect.` : `Removed from ${setup.settings_path}.` });
   };
   const line = (part: "statusline" | "hooks") => {
     const state = (part === "statusline" ? setup.statusline?.state : setup.hooks?.state) ?? "missing";
@@ -368,26 +379,38 @@ function ClaudeSetupCheck({ setup }: { setup: ClaudeSetup | null }) {
       </li>;
     }
     let icon = "⬜";
-    let text = "Not added yet: copy it from below.";
+    let text = "Not installed";
+    let actions: React.ReactNode = <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part] })}>Install</button>;
     if (state === "other") {
       icon = "⚠️";
-      text = "Claude Code already uses another status line; ours would replace it.";
+      text = "Claude Code already uses another status line.";
+      actions = <>
+        <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part], chain_statusline: true })}>Keep it and add quota (recommended)</button>
+        <button type="button" className="small" disabled={busy} onClick={() => void run({ action: "install", parts: [part], replace_statusline: true })}>Replace it</button>
+      </>;
     } else if (state === "wrong_port") {
       icon = "⛔";
-      text = `Set to another port; this Bridge listens on ${setup.port}. Copy the commands below again.`;
+      text = `Set to another port; this Bridge listens on ${setup.port}.`;
+      actions = <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part] })}>Fix it</button>;
     } else if (state === "partial") {
       icon = "⚠️";
-      text = "Only some of the hook events are there; copy the hooks below again.";
+      text = "Only part of it is installed.";
+      actions = <button type="button" className="primary small" disabled={busy} onClick={() => void run({ action: "install", parts: [part] })}>Fix it</button>;
     } else if (state === "ours") {
       icon = last ? "✅" : "⏳";
-      text = last ? `Working, last report ${sinceText(last)}` : "Added. Waiting for the first report: start a new Claude Code session.";
+      text = last ? `Working, last report ${sinceText(last)}` : "Installed. Waiting for the first report: start a new Claude Code session.";
       if (part === "statusline" && setup.statusline?.chained) text += " (after your own status line)";
+      actions = null;
     }
     return <li className={`setup-line setup-${state}${state === "ours" && last ? " is-ok" : ""}`}>
       <span className="setup-icon" aria-hidden="true">{icon}</span>
       <div className="setup-text"><b>{title}</b><span>{text}</span><small>{purpose}</small></div>
       <div className="setup-actions">
+        {actions}
         {!installed && <button type="button" className="link-button" onClick={() => skip(part, true)}>I don't need this</button>}
+        {installed && (confirmRemove === part
+          ? <span className="confirm-line">Remove it from Claude Code's settings?<button type="button" className="danger small" disabled={busy} onClick={() => void run({ action: "remove", parts: [part] })}>Remove</button><button type="button" className="link-button" onClick={() => setConfirmRemove(null)}>Cancel</button></span>
+          : <button type="button" className="link-button" onClick={() => setConfirmRemove(part)}>Remove</button>)}
       </div>
     </li>;
   };
@@ -395,27 +418,25 @@ function ClaudeSetupCheck({ setup }: { setup: ClaudeSetup | null }) {
     statusLine: { type: "command", command: setup.statusline_command },
     hooks: Object.fromEntries(HOOK_EVENT_NAMES.map((event) => [event, [{ hooks: [{ type: "command", command: setup.hook_command, timeout: 3 }] }]])),
   }, null, 2);
-  const missing = ["statusline", "hooks"].some((part) => {
-    const state = (part === "statusline" ? setup.statusline?.state : setup.hooks?.state) ?? "missing";
-    return state !== "ours" && !skipped.includes(part);
-  });
   return <div className="setup-check">
     <div className="setup-head"><b>Claude Code setup</b><small>Both run small scripts from this Bridge while Claude Code works; they only report to this computer.</small></div>
     <ul className="setup-lines">{line("statusline")}{line("hooks")}</ul>
-    <details className="ollama-advanced" open={missing}>
-      <summary>Add them to Claude Code</summary>
-      <p className="ollama-hint">Add these to {setup.settings_path} (merge with what is there: keep your own hooks and settings), then start a new Claude Code session.</p>
+    {message && <p className={message.ok ? "setup-message" : "setup-message is-error"} role="status">{message.text}</p>}
+    <details className="ollama-advanced">
+      <summary>Do it yourself</summary>
+      <p className="ollama-hint">Add these to {setup.settings_path} (merge with what is there), then start a new Claude Code session.</p>
       <pre className="setup-snippet">{snippet}</pre>
       <button type="button" className="small" onClick={() => void navigator.clipboard?.writeText(snippet)}>Copy</button>
     </details>
   </div>;
 }
 
-function ClaudeCodeCard({ config, snapshot, updateConfig, setup }: {
+function ClaudeCodeCard({ config, snapshot, updateConfig, setup, onSetupChange }: {
   config: Config | null;
   snapshot?: PluginSnapshot;
   updateConfig: (change: (current: Config) => Config) => void;
   setup: ClaudeSetup | null;
+  onSetupChange: (body: SetupChange) => Promise<string | null>;
 }) {
   const pluginConfig = config?.plugins?.claude_code as ClaudeCodeConfig | undefined;
   const setField = (field: keyof ClaudeCodeConfig, value: string | number | boolean | null) => {
@@ -431,7 +452,7 @@ function ClaudeCodeCard({ config, snapshot, updateConfig, setup }: {
     <p>CLAUDE CODE</p>
     <h2>Sessions &amp; quota</h2>
     <label className="toggle-field claude-code-toggle"><input type="checkbox" checked={pluginConfig?.enabled ?? false} onChange={(event) => setField("enabled", event.target.checked)} /> Enable Claude Code provider</label>
-    <ClaudeSetupCheck setup={setup} />
+    <ClaudeSetupCheck setup={setup} onChange={onSetupChange} />
     <details className="ollama-advanced">
       <summary>Advanced settings</summary>
       <label>Claude executable
@@ -450,7 +471,7 @@ function ClaudeCodeCard({ config, snapshot, updateConfig, setup }: {
     {snapshot?.health && <div className={`ollama-health ${snapshot.health.connected ? "is-connected" : "is-error"}`}><span className="health-dot" /><span>{snapshot.health.detail}</span></div>}
     <div className="codex-session-summary"><b>{snapshot?.sessions?.length ?? 0}</b><span>recent Claude Code Sessions available to button zones</span></div>
     {snapshot?.signals && <UsageBars signals={snapshot.signals} generic display={config?.stream_deck.quota_display ?? "remaining"} />}
-    <p className="provider-note">Session state comes from the running Claude process and its transcript, so it works without setup; the companion hook (above) adds an exact WAIT when Claude needs your approval. SUB means the turn ended but subagents or other agents still work for it. Quota appears after Claude Code's status line receives its first API response.</p>
+    <p className="provider-note">Session state comes from the running Claude process and its transcript, so it works without setup; the companion hook (installed above) adds an exact WAIT when Claude needs your approval. SUB means the turn ended but subagents or other agents still work for it. Quota appears after Claude Code's status line receives its first API response.</p>
   </section>;
 }
 
@@ -1004,6 +1025,16 @@ function App() {
     updateBinding({ action_params: params });
   };
 
+  // Writes Claude Code's settings: the Bridge accepts this only from its own page.
+  const changeClaudeSetup = async (body: SetupChange) => {
+    try {
+      setClaudeSetup(await api<ClaudeSetup>("claude-code/setup", { method: "POST", headers: { "x-stream-micro": "1" }, body: JSON.stringify(body) }));
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Could not change Claude Code's settings";
+    }
+  };
+
   const save = async () => {
     if (!config || !dirtyRef.current) return;
     try {
@@ -1201,7 +1232,7 @@ function App() {
         </section>
         <OpenCodeCard config={config} snapshot={snapshots.opencode} updateConfig={updateConfig} />
         <CodexCard config={config} snapshot={snapshots.codex} updateConfig={updateConfig} />
-        <ClaudeCodeCard config={config} snapshot={snapshots.claude_code} updateConfig={updateConfig} setup={claudeSetup} />
+        <ClaudeCodeCard config={config} snapshot={snapshots.claude_code} updateConfig={updateConfig} setup={claudeSetup} onSetupChange={changeClaudeSetup} />
         <OllamaQuotaCard config={config} snapshot={snapshots.ollama_quota} updateConfig={updateConfig} />
         <HttpQuotaCard config={config} snapshot={snapshots.http_quota} updateConfig={updateConfig} />
       </div>

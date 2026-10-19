@@ -581,6 +581,25 @@ class BridgeService:
         activity = plugin.setup_activity() if isinstance(plugin, ClaudeCodePlugin) else {}
         return {**status, **activity, "port": port}
 
+    def change_claude_setup(
+        self, action: str, parts: set[str], replace_statusline: bool, chain_statusline: bool = False
+    ) -> dict[str, Any]:
+        port = self.config.bridge.port
+        path = self._claude_settings_path()
+        if action == "install":
+            result = claude_setup.install(
+                path,
+                port,
+                parts,
+                replace_statusline=replace_statusline,
+                chain_statusline=chain_statusline,
+            )
+        elif action == "remove":
+            result = claude_setup.remove(path, port, parts)
+        else:
+            raise claude_setup.ClaudeSetupError("action must be install or remove")
+        return {**self.claude_setup_status(), "backup": result.get("backup")}
+
     def invoke(self, plugin_id: str, action: str, params: dict[str, Any]) -> Any:
         plugin = self._plugin(plugin_id)
         if action not in plugin.manifest.actions:

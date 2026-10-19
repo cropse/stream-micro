@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .bridge import BridgeError, BridgeService
+from .claude_setup import ClaudeSetupError
 from .control_config import ControlConfigError
 from .device import DeviceError, discover_mk2_devices
 from .plugins.claude_code import ClaudeCodeError
@@ -121,9 +122,32 @@ def create_app(config_path: Path | str, *, service: BridgeService | None = None)
         except (BridgeError, ClaudeCodeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    def same_origin_only(request: Request) -> None:
+        """Writing Claude Code's settings needs our own page: an Origin (always
+        sent by browsers) for this loopback Host, and a header a plain
+        cross-site form cannot set."""
+
+        if request.headers.get("origin") is None or request.headers.get("x-stream-micro") != "1":
+            raise HTTPException(status_code=403, detail="Only the Deck Bridge page may do this")
+        own_page_only(request)
+
     @app.get("/api/claude-code/setup")
     def get_claude_setup() -> dict[str, Any]:
         return service.claude_setup_status()
+
+    @app.post("/api/claude-code/setup")
+    def post_claude_setup(data: dict[str, Any], request: Request) -> dict[str, Any]:
+        same_origin_only(request)
+        parts = data.get("parts")
+        try:
+            return service.change_claude_setup(
+                str(data.get("action")),
+                set(parts) if isinstance(parts, list) else set(),
+                data.get("replace_statusline") is True,
+                data.get("chain_statusline") is True,
+            )
+        except ClaudeSetupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/hooks/claude-code/quota")
     def post_claude_code_quota(data: dict[str, Any]) -> dict[str, str | bool | None]:
