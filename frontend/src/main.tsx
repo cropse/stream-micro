@@ -29,7 +29,7 @@ type UsageWindow = {
   remaining_percent?: string;
   used?: string;
   remaining?: string;
-  limit?: string;
+  limit?: string | number;  // a plain number is a fixed amount
   fraction?: boolean;
   reset_at?: string;
 };
@@ -98,7 +98,8 @@ function quotaPreview(button: Button | undefined, snapshot: PluginSnapshot | und
   const used = [signals?.primary_percent, signals?.session_percent, signals?.secondary_percent, signals?.weekly_percent]
     .find((value): value is number => typeof value === "number");
   if (!problem && used === undefined) problem = "No quota data";
-  return { title: customLabel || title, problem, used, stale: Boolean(signals?.stale) };
+  const amount = moneyText(signals?.primary_amount_left, signals?.primary_currency);
+  return { title: customLabel || title, problem, used, stale: Boolean(signals?.stale), amount };
 }
 type BridgeStatus = {
   selected_session_id?: string | null;
@@ -164,6 +165,17 @@ function quotaShown(usedPct: number, display: QuotaDisplay) {
 
 const STALE_COLOR = "#6f8099";
 
+// Balances show money left (control_renderer._money_text uses the same signs).
+const CURRENCY_SIGNS: Record<string, string> = { CNY: "¥", USD: "$", EUR: "€", JPY: "¥" };
+function moneyText(amount: unknown, currency: unknown) {
+  if (typeof amount !== "number" || !Number.isFinite(amount)) return null;
+  const code = typeof currency === "string" ? currency : "";
+  const text = Math.abs(amount).toFixed(2);
+  // A debt reads -$1.23; anything that rounds to zero is just $0.00.
+  const minus = amount < 0 && Number(text) !== 0 ? "-" : "";
+  return `${minus}${CURRENCY_SIGNS[code] ?? (code ? `${code} ` : "")}${text}`;
+}
+
 function UsageBars({ signals, generic = false, display = "remaining" }: {
   signals: QuotaSignals;
   generic?: boolean;
@@ -181,12 +193,12 @@ function UsageBars({ signals, generic = false, display = "remaining" }: {
   return <div className={`ollama-usage-grid${stale ? " is-stale" : ""}`}>
     {stale && <small className="stale-note">Last seen{typeof signals.seen_at === "string" ? ` ${formatReset(signals.seen_at)}` : ""} — the source is not reachable now.</small>}
     <div className="usage-bar">
-      <div className="usage-bar-label"><span>{primaryLabel}</span><b style={{ color: tint(primary) }}>{primary != null ? quotaShown(primary, display).text : "—"}</b></div>
+      <div className="usage-bar-label"><span>{primaryLabel}</span><b style={{ color: tint(primary) }}>{moneyText(signals.primary_amount_left, signals.primary_currency) ?? (primary != null ? quotaShown(primary, display).text : "—")}</b></div>
       <div className="usage-bar-track"><div className="usage-bar-fill" style={{ width: `${primary != null ? quotaShown(primary, display).value : 0}%`, background: tint(primary) }} /></div>
       <small>Resets: {formatReset(primaryReset)}</small>
     </div>
     <div className="usage-bar">
-      <div className="usage-bar-label"><span>{secondaryLabel}</span><b style={{ color: tint(secondary) }}>{secondary != null ? quotaShown(secondary, display).text : "—"}</b></div>
+      <div className="usage-bar-label"><span>{secondaryLabel}</span><b style={{ color: tint(secondary) }}>{moneyText(signals.secondary_amount_left, signals.secondary_currency) ?? (secondary != null ? quotaShown(secondary, display).text : "—")}</b></div>
       <div className="usage-bar-track"><div className="usage-bar-fill" style={{ width: `${secondary != null ? quotaShown(secondary, display).value : 0}%`, background: tint(secondary) }} /></div>
       <small>Resets: {formatReset(secondaryReset)}</small>
     </div>
@@ -341,6 +353,12 @@ function ClaudeCodeCard({ config, snapshot, updateConfig }: {
 const USAGE_PRESETS: { id: string; name: string; hint: string }[] = [
   { id: "openrouter", name: "OpenRouter key limit", hint: "Any OpenRouter API key that has a spending limit." },
   { id: "openrouter_credits", name: "OpenRouter credits", hint: "Account credits; OpenRouter may require a management key." },
+  { id: "deepseek", name: "DeepSeek balance", hint: "A DeepSeek API key (platform.deepseek.com → API keys). Reading the balance costs nothing." },
+  { id: "moonshot", name: "Moonshot balance (international)", hint: "An API key from platform.moonshot.ai (USD account). Reading the balance costs nothing." },
+  { id: "moonshot_cn", name: "Moonshot balance (China)", hint: "An API key from platform.moonshot.cn (CNY account). Reading the balance costs nothing." },
+  { id: "siliconflow", name: "SiliconFlow balance (China)", hint: "An API key from cloud.siliconflow.cn (CNY account). Reading the balance costs nothing." },
+  { id: "siliconflow_intl", name: "SiliconFlow balance (international)", hint: "An API key from cloud.siliconflow.com (USD account). Reading the balance costs nothing." },
+  { id: "novita", name: "Novita balance", hint: "An API key from novita.ai (Key Management). Reading the balance costs nothing." },
   { id: "ollama", name: "Ollama Cloud credits", hint: "An ollama.com API key (Settings → Keys). Reading the balance uses no credits; no cookie needed." },
   { id: "custom", name: "Custom JSON API", hint: "Any HTTPS endpoint that returns usage as JSON." },
 ];
@@ -446,7 +464,7 @@ function HttpQuotaCard({ config, snapshot, updateConfig }: {
               </label>
             </div>
             {fields.map((field) => <label key={field}>{`${field.replace("_", " ")} path`}
-              <input type="text" value={String(window[field] ?? "")} onChange={(event) => setWindow(index, at, { [field]: event.target.value })} />
+              <input type="text" value={String(window[field] ?? "")} onChange={(event) => setWindow(index, at, { [field]: field === "limit" && /^\d+(\.\d+)?$/.test(event.target.value.trim()) ? Number(event.target.value) : event.target.value })} />
             </label>)}
             {(mode === "used_percent" || mode === "remaining_percent") && <label className="toggle-field"><input type="checkbox" checked={window.fraction ?? false} onChange={(event) => setWindow(index, at, { fraction: event.target.checked })} /> Value is a fraction (0–1)</label>}
             <label>Reset time path
@@ -944,7 +962,7 @@ function App() {
             const label = session?.title ?? (quota ? quota.title || `${displayName(pluginId)} quota` : isChild ? "Session slot" : displayName(button?.component ?? null));
             const sublabel = session ? `${displayName(pluginId)} · ${session.project ?? "No project"}` : isChild ? `${displayName(pluginId)} · slot ${index - (parent?.key_index ?? 0) + 1}` : pluginId ? displayName(pluginId) : "Unassigned";
             const quotaDisplay = config?.stream_deck.quota_display ?? "remaining";
-            const state = session?.state ?? (quota ? quota.problem ?? `${quotaShown(quota.used ?? 0, quotaDisplay).text}${quota.stale ? " (last seen)" : ""}` : snapshot && !snapshot.health.connected ? snapshot.health.detail : button?.action ? displayName(button.action) : "No action");
+            const state = session?.state ?? (quota ? quota.problem ?? `${quota.amount ?? quotaShown(quota.used ?? 0, quotaDisplay).text}${quota.stale ? " (last seen)" : ""}` : snapshot && !snapshot.health.connected ? snapshot.health.detail : button?.action ? displayName(button.action) : "No action");
             const stateColor = !session && quota && !quota.problem ? quota.stale ? STALE_COLOR : pctColor(quota.used) : undefined;
             const isPinned = status?.pinned_sessions?.[String(index)]?.plugin === pluginId;
             return <button

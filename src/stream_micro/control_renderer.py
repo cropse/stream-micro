@@ -270,6 +270,8 @@ class QuotaWindow:
     label: str
     used: float
     reset_at: str | None
+    # Money left (for balances), shown instead of the percentage.
+    amount_text: str | None = None
     # The source knows only the day it resets (e.g. Ollama's refill date).
     date_only: bool = False
 
@@ -300,10 +302,32 @@ def quota_windows(signals: Mapping[str, object]) -> list[QuotaWindow]:
                 str(signals.get(f"{prefix}_label") or fallback).upper(),
                 float(min(max(value, 0), 100)),
                 reset if isinstance(reset, str) and reset else None,
+                _money_text(
+                    signals.get(f"{prefix}_amount_left"), signals.get(f"{prefix}_currency")
+                ),
                 date_only=signals.get(f"{prefix}_reset_precision") == "date",
             )
         )
     return windows
+
+
+_CURRENCY_SIGNS = {"CNY": "¥", "USD": "$", "EUR": "€", "JPY": "¥"}
+
+
+def _money_text(amount: object, currency: object) -> str | None:
+    """A balance short enough for a key: ``¥64``, ``$9.5``, ``$0.42``."""
+
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+        return None
+    if amount != amount or amount in (float("inf"), float("-inf")):
+        return None
+    sign = _CURRENCY_SIGNS.get(currency, "") if isinstance(currency, str) else ""
+    size = abs(amount)
+    digits = 0 if size >= 100 else 1 if size >= 10 else 2
+    text = f"{size:.{digits}f}"
+    # A debt reads -$1.23; anything that rounds to zero is just $0.00.
+    minus = "-" if amount < 0 and float(text) != 0 else ""
+    return f"{minus}{sign}{text}"
 
 
 def select_account(snapshot: PluginSnapshot, key: str) -> QuotaAccount | None:
@@ -535,6 +559,7 @@ def render_quota_key(
     for window, (size_px, center_y) in zip(windows, rows, strict=False):
         shown = window.shown(display)
         color = _STALE_COLOR if stale else _quota_color(window.remaining)
+        number = window.amount_text or f"{shown:.0f}%"
         (
             window_label,
             label_font,
@@ -543,12 +568,12 @@ def render_quota_key(
             number_width,
             gap,
             size_px,
-        ) = _quota_row(draw, window.label, f"{shown:.0f}%", size_px, scale, width - 6)
+        ) = _quota_row(draw, window.label, number, size_px, scale, width - 6)
         left = (width - label_width - gap - number_width) // 2
         draw.text((left, center_y), window_label, anchor="lm", fill="#dce6f6", font=label_font)
         draw.text(
             (left + label_width + gap, center_y),
-            f"{shown:.0f}%",
+            number,
             anchor="lm",
             fill=color,
             font=number_font,
@@ -561,9 +586,14 @@ def render_quota_key(
             draw.rectangle((4, bar_top, fill_right, bar_bottom), fill=color)
 
     binding_window = _binding_window(windows)
+    footer = (
+        "BALANCE"
+        if binding_window.amount_text and not binding_window.reset_at
+        else _format_reset(binding_window.reset_at, date_only=binding_window.date_only)
+    )
     draw.text(
         (width // 2, height - round(6 * scale)),
-        _format_reset(binding_window.reset_at, date_only=binding_window.date_only),
+        footer,
         anchor="mm",
         fill="#dce6f6",
         font=_font(round(10 * scale), bold=True),

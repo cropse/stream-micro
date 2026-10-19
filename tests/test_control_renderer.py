@@ -440,3 +440,25 @@ def test_a_chosen_label_is_fitted_not_replaced() -> None:
     # Too wide for the title row at its normal size, it is shrunk or cut,
     # never swapped for the provider's name ("USAGE").
     assert key("MY PERSONAL KEY").tobytes() != key("USAGE").tobytes()
+
+
+def test_a_balance_shows_money_and_a_balance_footer() -> None:
+    from stream_micro.control_renderer import quota_windows
+
+    def money(**signals: object) -> str | None:
+        return quota_windows({"primary_percent": 1, **signals})[0].amount_text
+
+    assert money(primary_amount_left=64.0, primary_currency="CNY") == "¥64.0"
+    assert money(primary_amount_left=0.4234, primary_currency="USD") == "$0.42"
+    assert money(primary_amount_left=512.4) == "512"
+    assert money() is None
+
+
+def test_an_empty_balance_has_no_minus_sign_and_a_debt_puts_it_first() -> None:
+    from stream_micro.control_renderer import _money_text
+
+    assert _money_text(-0.0, "USD") == "$0.00"
+    assert _money_text(-0.001, "CNY") == "¥0.00"
+    assert _money_text(-1.234, "USD") == "-$1.23"
+    assert _money_text(64.0, "CNY") == "¥64.0"
+

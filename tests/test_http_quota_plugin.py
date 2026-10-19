@@ -513,3 +513,201 @@ def test_reads_waiting_their_turn_are_not_sent_after_close(monkeypatch) -> None:
     plugin = _plugin(handler, *sources)
     assert plugin.refresh() is False
     assert sent == ["/a"]
+
+
+# DeepSeek's documented balance reply (api-docs.deepseek.com); numbers are made up.
+DEEPSEEK_BALANCE_BODY = {
+    "is_available": True,
+    "balance_infos": [
+        {
+            "currency": "CNY",
+            "total_balance": "64.00",
+            "granted_balance": "0.00",
+            "topped_up_balance": "64.00",
+        }
+    ],
+}
+
+
+def _deepseek(left: str) -> dict:
+    return {
+        "is_available": True,
+        "balance_infos": [
+            {
+                "currency": "CNY",
+                "total_balance": left,
+                "granted_balance": "0.00",
+                "topped_up_balance": left,
+            }
+        ],
+    }
+
+
+def test_deepseek_needs_only_a_key_and_counts_the_latest_top_up_as_full(tmp_path: Path) -> None:
+    replies = ["64.00", "48.00", "80.00", "60.00"]
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=_deepseek(replies.pop(0)))
+
+    source = {"id": "deepseek", "preset": "deepseek", "api_key": "secret-key"}
+    validate_http_quota_config({"sources": [source]})
+    plugin = _plugin(handler, source, tmp_path=tmp_path)
+
+    def left_percent() -> float:
+        plugin.refresh()
+        signals = plugin.snapshot().accounts[0].signals
+        assert signals is not None
+        return 100 - float(signals["primary_percent"])
+
+    assert left_percent() == pytest.approx(100)  # first look: what is there is full
+    assert str(seen[0].url) == "https://api.deepseek.com/user/balance"
+    assert seen[0].headers["Authorization"] == "Bearer secret-key"
+    assert left_percent() == pytest.approx(75)  # spent 16 of 64
+    assert left_percent() == pytest.approx(100)  # topped up: the new balance is full
+    signals = plugin.snapshot().accounts[0].signals
+    assert signals is not None
+    assert (signals["primary_amount_left"], signals["primary_currency"]) == (80.0, "CNY")
+
+    # The full mark survives a restart.
+    restarted = _plugin(handler, source, tmp_path=tmp_path)
+    restarted.refresh()
+    signals = restarted.snapshot().accounts[0].signals
+    assert signals is not None
+    assert 100 - float(signals["primary_percent"]) == pytest.approx(75)
+
+
+def test_a_budget_replaces_the_automatic_full_mark() -> None:
+    source = {"id": "deepseek", "preset": "deepseek", "api_key": "k", "budget": 100}
+    validate_http_quota_config({"sources": [source]})
+    plugin = _plugin(lambda request: httpx.Response(200, json=_deepseek("64.00")), source)
+    plugin.refresh()
+    signals = plugin.snapshot().accounts[0].signals
+    assert signals is not None
+    assert signals["primary_percent"] == pytest.approx(36.0)
+
+
+@pytest.mark.parametrize("budget", [0, -5, "100", True, float("nan")])
+def test_a_budget_must_be_a_positive_number(budget) -> None:
+    source = {"id": "deepseek", "preset": "deepseek", "api_key": "k", "budget": budget}
+    with pytest.raises(HttpQuotaError, match="budget"):
+        validate_http_quota_config({"sources": [source]})
+
+
+def test_a_window_limit_may_be_a_fixed_amount() -> None:
+    window = {"label": "BAL", "remaining": "left", "limit": 50}
+    validate_http_quota_config({"sources": [_source(windows=[window])]})
+    assert usage_signals({"left": 40}, [window])["primary_percent"] == pytest.approx(20.0)
+
+
+@pytest.mark.parametrize(
+    ("preset", "url", "body", "amount", "currency"),
+    [
+        (
+            "moonshot",
+            "https://api.moonshot.ai/v1/users/me/balance",
+            {
+                "code": 0,
+                "data": {
+                    "available_balance": 49.58894,
+                    "voucher_balance": 46.58893,
+                    "cash_balance": 3.00001,
+                },
+                "status": True,
+            },
+            49.58894,
+            "USD",
+        ),
+        (
+            "moonshot_cn",
+            "https://api.moonshot.cn/v1/users/me/balance",
+            {"code": 0, "data": {"available_balance": 12.5}, "status": True},
+            12.5,
+            "CNY",
+        ),
+        (
+            "siliconflow",
+            "https://api.siliconflow.cn/v1/user/info",
+            {
+                "code": 20000,
+                "status": True,
+                "data": {"balance": "0.88", "chargeBalance": "88.00", "totalBalance": "88.88"},
+            },
+            88.88,
+            "CNY",
+        ),
+        (
+            "siliconflow_intl",
+            "https://api.siliconflow.com/v1/user/info",
+            {"code": 20000, "status": True, "data": {"totalBalance": "5.00"}},
+            5.0,
+            "USD",
+        ),
+        (
+            "novita",
+            "https://api.novita.ai/openapi/v1/billing/balance/detail",
+            {"availableBalance": "1000000", "cashBalance": "800000", "creditLimit": "200000"},
+            100.0,
+            "USD",
+        ),
+    ],
+)
+def test_balance_presets_show_money_left(preset, url, body, amount, currency) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=body)
+
+    source = {"id": preset.replace("_", "-"), "preset": preset, "api_key": "secret-key"}
+    validate_http_quota_config({"sources": [source]})
+    plugin = _plugin(handler, source)
+    plugin.refresh()
+    assert str(seen[0].url) == url
+    assert seen[0].headers["Authorization"] == "Bearer secret-key"
+    signals = plugin.snapshot().accounts[0].signals
+    assert signals is not None
+    assert signals["primary_amount_left"] == pytest.approx(amount)
+    assert signals["primary_currency"] == currency
+    assert signals["primary_percent"] == pytest.approx(0)  # first look: full
+
+
+def test_scaled_balances_compare_with_the_full_mark_in_money() -> None:
+    replies = ["1000000", "250000"]
+    source = {"id": "novita", "preset": "novita", "api_key": "k"}
+    plugin = _plugin(
+        lambda request: httpx.Response(200, json={"availableBalance": replies.pop(0)}), source
+    )
+    plugin.refresh()
+    plugin.refresh()
+    signals = plugin.snapshot().accounts[0].signals
+    assert signals is not None
+    assert signals["primary_amount_left"] == pytest.approx(25.0)
+    assert signals["primary_percent"] == pytest.approx(75.0)
+
+
+@pytest.mark.parametrize(
+    "window", [{"unit": "usd"}, {"unit": "DOLLARS"}, {"amount_scale": 0}, {"amount_scale": "1"}]
+)
+def test_money_settings_are_checked(window) -> None:
+    base = {"label": "BAL", "remaining": "left", "auto_limit": True}
+    with pytest.raises(HttpQuotaError):
+        validate_http_quota_config({"sources": [_source(windows=[{**base, **window}])]})
+
+
+def test_a_top_up_while_stopped_still_counts_after_a_restart(tmp_path: Path) -> None:
+    replies = ["100.00", "20.00", "50.00"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_deepseek(replies.pop(0)))
+
+    source = {"id": "deepseek", "preset": "deepseek", "api_key": "k"}
+    plugin = _plugin(handler, source, tmp_path=tmp_path)
+    plugin.refresh()  # full: 100
+    plugin.refresh()  # spent down to 20
+    restarted = _plugin(handler, source, tmp_path=tmp_path)
+    restarted.refresh()  # topped up to 50 while the Bridge was stopped
+    signals = restarted.snapshot().accounts[0].signals
+    assert signals is not None
+    assert signals["primary_percent"] == pytest.approx(0)  # 50 is the new full bar

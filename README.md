@@ -123,6 +123,14 @@ HTTPS, one source per account; on a quota key, pick the source as its
   key) and `ollama` (Ollama Cloud's included monthly credits from the
   documented `/api/balance`, with an ollama.com API key; an easier
   alternative to the legacy `ollama_quota` session cookie).
+- **Balances** (documented, ordinary API keys, free to read): `deepseek`,
+  `moonshot` (platform.moonshot.ai, USD), `moonshot_cn` (platform.moonshot.cn,
+  CNY), `siliconflow` (siliconflow.cn, CNY), `siliconflow_intl`
+  (siliconflow.com, USD) and `novita`. These services report only what is
+  left, so the key shows the money left (`$3.66`, footer `BALANCE`) and the
+  bar compares it with the balance after the latest top-up: a balance that
+  goes up counts as a top-up and becomes the full bar. Set `budget` on a
+  source to use a fixed amount as the full bar instead.
 - **Custom** sources name where the numbers are with JSON paths such as
   `data.limit`, `items.0.used` or `limits[type=TOKENS,unit=3].percentage`
   (the first list item whose fields match). A row reads a used or remaining

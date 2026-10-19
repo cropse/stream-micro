@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 from urllib.parse import parse_qsl, urlsplit
 
 import httpx
@@ -68,6 +68,7 @@ _SOURCE_KEYS = frozenset(
         "api_key",
         "api_key_env",
         "auth_header",
+        "budget",
         "auth_scheme",
         "windows",
     }
@@ -82,9 +83,21 @@ _WINDOW_KEYS = frozenset(
         "limit",
         "fraction",
         "reset_at",
+        "currency",
+        "unit",
+        "amount_scale",
+        "auto_limit",
     }
 )
-_PATH_KEYS = ("used_percent", "remaining_percent", "used", "remaining", "limit", "reset_at")
+_PATH_KEYS = (
+    "used_percent",
+    "remaining_percent",
+    "used",
+    "remaining",
+    "limit",
+    "reset_at",
+    "currency",
+)
 
 # Known services: everything but the key.  A source may still override any field.
 # Only documented endpoints belong here.
@@ -100,6 +113,80 @@ PRESETS: dict[str, dict[str, Any]] = {
         "url": "https://openrouter.ai/api/v1/credits",
         # Account credits; OpenRouter may require a management key for this.
         "windows": [{"label": "CREDIT", "limit": "data.total_credits", "used": "data.total_usage"}],
+    },
+    "deepseek": {
+        "title": "DEEPSEEK",
+        # Documented at api-docs.deepseek.com (GET /user/balance). It reports the
+        # balance only: the balance after the latest top-up counts as full
+        # (`auto_limit`), unless the source sets a `budget`.
+        "url": "https://api.deepseek.com/user/balance",
+        "windows": [
+            {
+                "label": "BAL",
+                "remaining": "balance_infos.0.total_balance",
+                "currency": "balance_infos.0.currency",
+                "auto_limit": True,
+            }
+        ],
+    },
+    # Balance-only services: what is left is shown as money; the bar compares it
+    # with the balance after the latest top-up. All documented, read with an
+    # ordinary API key, and free to call.
+    "moonshot": {
+        "title": "MOONSHOT",
+        # platform.moonshot.ai (USD): GET /v1/users/me/balance.
+        "url": "https://api.moonshot.ai/v1/users/me/balance",
+        "windows": [
+            {
+                "label": "BAL",
+                "remaining": "data.available_balance",
+                "unit": "USD",
+                "auto_limit": True,
+            }
+        ],
+    },
+    "moonshot_cn": {
+        "title": "MOONSHOT",
+        # platform.moonshot.cn (CNY): the same call on the China site.
+        "url": "https://api.moonshot.cn/v1/users/me/balance",
+        "windows": [
+            {
+                "label": "BAL",
+                "remaining": "data.available_balance",
+                "unit": "CNY",
+                "auto_limit": True,
+            }
+        ],
+    },
+    "siliconflow": {
+        "title": "SILICONFLOW",
+        # siliconflow.cn (CNY): GET /v1/user/info, data.totalBalance.
+        "url": "https://api.siliconflow.cn/v1/user/info",
+        "windows": [
+            {"label": "BAL", "remaining": "data.totalBalance", "unit": "CNY", "auto_limit": True}
+        ],
+    },
+    "siliconflow_intl": {
+        "title": "SILICONFLOW",
+        # siliconflow.com (USD): the same call on the international site.
+        "url": "https://api.siliconflow.com/v1/user/info",
+        "windows": [
+            {"label": "BAL", "remaining": "data.totalBalance", "unit": "USD", "auto_limit": True}
+        ],
+    },
+    "novita": {
+        "title": "NOVITA",
+        # GET /openapi/v1/billing/balance/detail, in 1/10000 USD.
+        "url": "https://api.novita.ai/openapi/v1/billing/balance/detail",
+        "windows": [
+            {
+                "label": "BAL",
+                "remaining": "availableBalance",
+                "unit": "USD",
+                "amount_scale": 0.0001,
+                "auto_limit": True,
+            }
+        ],
     },
     "ollama": {
         "title": "OLLAMA",
@@ -233,12 +320,31 @@ def _reset_iso(value: object) -> str | None:
     return epoch_to_iso(number / 1000 if number > 1e11 else number)
 
 
+def _is_amount(value: object) -> TypeGuard[float]:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def _amount_scale(window: Mapping[str, Any]) -> float:
+    scale = window.get("amount_scale")
+    return float(scale) if _is_amount(scale) else 1.0
+
+
 def window_used_percent(body: object, window: Mapping[str, Any]) -> float | None:
     """Used percentage of one window, from whichever fields the window names."""
 
     def value(name: str) -> float | None:
         path = window.get(name)
-        return _number(read_path(body, path)) if isinstance(path, str) and path else None
+        if name == "limit" and _is_amount(path):
+            return float(path)  # a fixed amount (a budget), not a path
+        number = _number(read_path(body, path)) if isinstance(path, str) and path else None
+        if number is not None and name in ("used", "remaining", "limit"):
+            number *= _amount_scale(window)
+        return number
 
     scale = 100.0 if window.get("fraction") is True else 1.0
     used = value("used_percent")
@@ -269,6 +375,19 @@ def usage_signals(body: object, windows: list[Mapping[str, Any]]) -> QuotaSignal
             continue
         signals[f"{prefix}_percent"] = used
         signals[f"{prefix}_label"] = str(window.get("label") or "").strip().upper()[:8] or None
+        currency = window.get("currency")
+        fixed_unit = window.get("unit")
+        remaining = window.get("remaining")
+        is_money = (isinstance(currency, str) and currency) or isinstance(fixed_unit, str)
+        if is_money and isinstance(remaining, str) and remaining:
+            # A money balance: show what is left as money.
+            left = _number(read_path(body, remaining))
+            unit = (
+                read_path(body, currency) if isinstance(currency, str) and currency else fixed_unit
+            )
+            if left is not None:
+                signals[f"{prefix}_amount_left"] = round(left * _amount_scale(window), 6)
+                signals[f"{prefix}_currency"] = unit if isinstance(unit, str) else None
         reset = window.get("reset_at")
         signals[f"{prefix}_reset_at"] = (
             _reset_iso(read_path(body, reset)) if isinstance(reset, str) and reset else None
@@ -288,6 +407,15 @@ def resolve_source(source: Mapping[str, Any]) -> dict[str, Any]:
         # Blank means "use the preset", except auth_scheme: "" sends the bare key.
         if value is not None and (key == "auth_scheme" or value not in ("", [])):
             resolved[key] = value
+    # A budget is the 100% of windows that report only what is left.
+    budget = resolved.pop("budget", None)
+    if _is_amount(budget) and isinstance(resolved.get("windows"), list):
+        resolved["windows"] = [
+            {**window, "limit": budget}
+            if isinstance(window, Mapping) and not window.get("limit")
+            else window
+            for window in resolved["windows"]
+        ]
     return resolved
 
 
@@ -347,12 +475,21 @@ def _validate_window(source_id: str, index: int, window: object) -> None:
         raise HttpQuotaError(f"{where}: unknown setting(s): {', '.join(unknown)}")
     if "fraction" in window and not isinstance(window["fraction"], bool):
         raise HttpQuotaError(f"{where}: fraction must be a boolean")
+    if "auto_limit" in window and not isinstance(window["auto_limit"], bool):
+        raise HttpQuotaError(f"{where}: auto_limit must be a boolean")
+    unit = window.get("unit")
+    if unit is not None and not (isinstance(unit, str) and re.fullmatch(r"[A-Z]{3}", unit)):
+        raise HttpQuotaError(f"{where}: unit must be a currency code such as USD")
+    if "amount_scale" in window and not _is_amount(window["amount_scale"]):
+        raise HttpQuotaError(f"{where}: amount_scale must be a positive number")
     label = window.get("label")
     if label is not None and not isinstance(label, str):
         raise HttpQuotaError(f"{where}: label must be text")
     for name in _PATH_KEYS:
         path = window.get(name)
         if path is None or path == "":
+            continue
+        if name == "limit" and _is_amount(path):
             continue
         if not isinstance(path, str):
             raise HttpQuotaError(f"{where}: {name} must be a JSON path")
@@ -361,6 +498,7 @@ def _validate_window(source_id: str, index: int, window: object) -> None:
     if not (
         has & {"used_percent", "remaining_percent"}
         or ("limit" in has and has & {"used", "remaining"})
+        or (window.get("auto_limit") is True and "remaining" in has)
     ):
         raise HttpQuotaError(
             f"{where} needs used_percent, remaining_percent, or limit with used or remaining"
@@ -423,6 +561,9 @@ def validate_http_quota_config(config: Mapping[str, object]) -> None:
         header = source.get("auth_header")
         if header and not re.fullmatch(r"[A-Za-z0-9-]{1,64}", str(header)):
             raise HttpQuotaError(f"http_quota source {source_id}: auth_header is not a header name")
+        budget = source.get("budget")
+        if budget is not None and not _is_amount(budget):
+            raise HttpQuotaError(f"http_quota source {source_id}: budget must be a positive number")
         resolved = resolve_source(source)
         _validate_url(source_id, resolved.get("url"))
         windows = resolved.get("windows")
@@ -469,6 +610,10 @@ class HttpQuotaPlugin:
         self._accounts: dict[str, QuotaAccount] = {}
         self._seen_at: dict[str, float] = {}
         self._fresh: set[str] = set()
+        # Balance-only windows: the balance after the latest top-up (the full
+        # mark) and the last balance read, per "source id:window index".
+        self._full: dict[str, float] = {}
+        self._last_left: dict[str, float] = {}
         self._load_cache()
         self._detail = "Waiting for first quota refresh"
         self._connected = False
@@ -519,6 +664,21 @@ class HttpQuotaPlugin:
             ):
                 continue
             source = next(item for item in self._sources if item["id"] == entry["id"])
+            marks = entry.get("full")
+            raw_lefts = entry.get("left")
+            lefts: Mapping[str, Any] = raw_lefts if isinstance(raw_lefts, Mapping) else {}
+            for name, mark in marks.items() if isinstance(marks, dict) else ():
+                if (
+                    isinstance(name, str)
+                    and name.startswith(f"{source['id']}:")
+                    and _is_amount(mark)
+                ):
+                    self._full[name] = float(mark)
+                    # The last balance read, so a top-up while stopped still counts.
+                    left = lefts.get(name)
+                    if isinstance(left, bool) or not isinstance(left, (int, float)):
+                        left = mark
+                    self._last_left[name] = float(left) if math.isfinite(left) else float(mark)
             self._accounts[source["id"]] = QuotaAccount(
                 source["id"], self._title(source), str(source.get("preset") or "custom"), signals
             )
@@ -545,6 +705,16 @@ class HttpQuotaPlugin:
                         "source": prints[account.id],
                         "signals": account.signals,
                         "seen_at": self._seen_at[account.id],
+                        "full": {
+                            name: mark
+                            for name, mark in self._full.items()
+                            if name.startswith(f"{account.id}:")
+                        },
+                        "left": {
+                            name: left
+                            for name, left in self._last_left.items()
+                            if name.startswith(f"{account.id}:")
+                        },
                     }
                     for account in self._accounts.values()
                     if account.signals and account.id in self._seen_at and account.id in prints
@@ -581,8 +751,43 @@ class HttpQuotaPlugin:
             body = response.json()
         except ValueError:
             return {}, "reply is not JSON"
-        signals = usage_signals(body, list(source.get("windows") or []))
+        windows = [
+            self._with_full_mark(source["id"], index, body, window)
+            for index, window in enumerate(source.get("windows") or [])
+        ]
+        signals = usage_signals(body, windows)
         return signals, None if signals else "no quota numbers at the configured paths"
+
+    def _with_full_mark(
+        self, source_id: str, index: int, body: object, window: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Give a balance-only window a limit: the balance after the latest top-up.
+
+        A balance that went up was topped up, so what is there now is full;
+        spending only lowers it. A set `budget` (a limit) wins.
+        """
+
+        remaining = window.get("remaining")
+        if (
+            window.get("auto_limit") is not True
+            or window.get("limit")
+            or not isinstance(remaining, str)
+        ):
+            return window
+        left = _number(read_path(body, remaining))
+        if left is None:
+            return window
+        left *= _amount_scale(window)
+        name = f"{source_id}:{index}"
+        with self._lock:
+            full = self._full.get(name)
+            last = self._last_left.get(name)
+            if full is None or last is None or left > last:
+                full = left
+            self._full[name] = full
+            self._last_left[name] = left
+        # An empty account reads as fully used rather than as no number.
+        return {**window, "limit": full if full > 0 else 1.0}
 
     def refresh(self) -> bool:
         """Read every source once; returns whether every source answered.
