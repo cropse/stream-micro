@@ -100,6 +100,17 @@ class OllamaQuotaPlugin:
         return PluginSnapshot(PluginHealth(False, "No cookie value configured"), signals={})
 
     def _snapshot_from_quota(self, quota: QuotaSnapshot) -> PluginSnapshot:
+        if quota.session is None or quota.weekly is None:
+            monthly = quota.monthly
+            assert monthly is not None
+            return PluginSnapshot(
+                PluginHealth(True, "Connected"),
+                signals={
+                    "primary_percent": monthly.percent_used,
+                    "primary_label": "MONTH",
+                    "primary_reset_at": monthly.reset_at.isoformat() if monthly.reset_at else None,
+                },
+            )
         return PluginSnapshot(
             PluginHealth(True, "Connected"),
             signals={

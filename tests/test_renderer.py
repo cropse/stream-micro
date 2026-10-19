@@ -43,3 +43,21 @@ def test_quota_renderer_font_renders_the_cjk_glyph_for_display() -> None:
 
 def test_error_renderer_uses_requested_dimensions() -> None:
     assert render_error_key("expired cookie", DisplayConfig(), (72, 72)).size == (72, 72)
+
+
+def test_variable_cjk_font_bold_is_heavier_than_regular() -> None:
+    import pytest
+
+    font = _font(24, bold=True)
+    if not str(getattr(font, "path", "")).endswith("-VF.ttf"):
+        pytest.skip("Variable Noto font is not installed on this machine")
+
+    def ink(bold: bool) -> int:
+        image = Image.new("L", (120, 40), 0)
+        ImageDraw.Draw(image).text((2, 2), "Wm 字", fill=255, font=_font(24, bold=bold))
+        histogram = image.histogram()
+        return sum(histogram[129:])
+
+    # Without an explicit weight the variable font renders its Thin instance
+    # for both, so bold would not be noticeably heavier.
+    assert ink(True) > ink(False) * 1.3

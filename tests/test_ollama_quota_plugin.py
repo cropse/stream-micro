@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from stream_micro.models import QuotaSnapshot, QuotaWindow, WindowKind
 from stream_micro.plugins.ollama_quota import OllamaQuotaPlugin
 from stream_micro.scraper import ScrapeError
@@ -177,3 +179,15 @@ def test_concurrent_snapshots_trigger_one_fetch() -> None:
         snapshot.signals is not None and snapshot.signals["session_percent"] == 12.5
         for snapshot in results
     )
+
+
+def test_monthly_credits_become_a_generic_quota_row() -> None:
+    reset = datetime(2026, 11, 14, tzinfo=timezone.utc)
+    monthly = QuotaSnapshot(monthly=QuotaWindow(WindowKind.MONTHLY, 11.0, reset))
+    plugin = OllamaQuotaPlugin({"cookie_value": "secret"}, fetch_quota=lambda _config: monthly)
+
+    assert plugin.snapshot().signals == {
+        "primary_percent": 11.0,
+        "primary_label": "MONTH",
+        "primary_reset_at": "2026-11-14T00:00:00+00:00",
+    }

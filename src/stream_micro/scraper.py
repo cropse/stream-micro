@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urljoin
 
 import httpx
@@ -22,6 +22,16 @@ class ExpiredCookieError(ScrapeError):
 ARIA_PATTERN = re.compile(
     r'aria-label=["\'](?P<label>Session|Weekly)\s+usage\s+'
     r'(?P<percent>\d{1,3}(?:\.\d+)?)%\s+used["\']',
+    re.IGNORECASE,
+)
+# Newer Ollama plans meter monthly credits instead of 5-hour/weekly windows.
+MONTHLY_PATTERN = re.compile(
+    r'aria-label=["\']Monthly credits used:\s*\$(?P<used>[\d,]+(?:\.\d+)?)\s+of\s+'
+    r'\$(?P<limit>[\d,]+(?:\.\d+)?)["\']',
+    re.IGNORECASE,
+)
+REFILL_PATTERN = re.compile(
+    r"Refills\s+to\s+\$[\d,.]+\s+on\s+(?P<date>[A-Z][a-z]+\s+\d{1,2},\s+\d{4})",
     re.IGNORECASE,
 )
 DATA_TIME_PATTERN = re.compile(r'data-time=["\'](?P<value>[^"\']+)["\']', re.IGNORECASE)
@@ -116,10 +126,36 @@ def _find_matches(document: str) -> dict[WindowKind, tuple[float, int]]:
     return found
 
 
+def _monthly_window(document: str) -> QuotaWindow | None:
+    """Monthly credits used of the plan's allowance, refilling on the stated date."""
+
+    match = MONTHLY_PATTERN.search(document)
+    if match is None:
+        return None
+    used = float(match.group("used").replace(",", ""))
+    limit = float(match.group("limit").replace(",", ""))
+    if limit <= 0:
+        return None
+    visible = html.unescape(re.sub(r"<[^>]+>", " ", document))
+    refill = REFILL_PATTERN.search(re.sub(r"\s+", " ", visible))
+    reset = None
+    if refill is not None:
+        try:
+            day = datetime.strptime(refill.group("date").replace(",", ""), "%B %d %Y")
+            reset = day.replace(tzinfo=timezone.utc)
+        except ValueError:
+            reset = None
+    return QuotaWindow(WindowKind.MONTHLY, min(max(used / limit * 100, 0.0), 100.0), reset)
+
+
 def parse_quota_page(document: str) -> QuotaSnapshot:
     matches = _find_matches(document)
-    missing = [kind.value for kind in WindowKind if kind not in matches]
+    windows = (WindowKind.SESSION, WindowKind.WEEKLY)
+    missing = [kind.value for kind in windows if kind not in matches]
     if missing:
+        monthly = _monthly_window(document)
+        if monthly is not None:
+            return QuotaSnapshot(monthly=monthly)
         raise ScrapeError(f"Could not find Ollama quota data for: {', '.join(missing)}")
 
     positions = sorted((position, kind) for kind, (_, position) in matches.items())

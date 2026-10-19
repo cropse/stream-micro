@@ -12,6 +12,8 @@ __pycache__/
 # Runtime config (contains secrets)
 bridge.yaml
 config.yaml
+bridge.log
+bridge.log.1
 
 # Sisyphus internal planning
 .sisyphus/

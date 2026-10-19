@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from stream_micro.bridge import BridgeService
@@ -201,3 +202,175 @@ def test_local_server_serves_built_dashboard(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert 'id="root"' in response.text
+
+
+def test_dashboard_scripts_are_javascript_even_if_the_os_maps_js_to_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import mimetypes
+    import re
+
+    # Windows registry entries can map .js to text/plain; browsers then refuse
+    # to run the dashboard's module script and the page stays blank.
+    monkeypatch.setitem(mimetypes.types_map, ".js", "text/plain")
+    with app_with_plugin(tmp_path) as client:
+        index = client.get("/").text
+        script = re.search(r'src="(/assets/[^"]+\.js)"', index)
+        assert script is not None
+        response = client.get(script.group(1))
+
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+
+
+def test_invalid_provider_setting_is_rejected_without_saving(tmp_path: Path) -> None:
+    config_path = tmp_path / "control.yaml"
+    write_control_config(config_path, default_control_config())
+    before = config_path.read_text(encoding="utf-8")
+    app = create_app(config_path)
+    service = cast(BridgeService, app.state.bridge)
+    running_config = service.config
+    data = control_config_data(service.config)
+    data["plugins"]["claude_code"] = {"enabled": True, "not_a_setting": 1}
+
+    with TestClient(app) as client:
+        response = client.put("/api/config", json=data)
+
+    assert response.status_code == 422
+    assert "not_a_setting" in response.json()["detail"]
+    assert config_path.read_text(encoding="utf-8") == before
+    assert service.config is running_config
+
+
+class _FakeProvider:
+    instances: list["_FakeProvider"] = []
+
+    def __init__(self, config) -> None:
+        self.config = config
+        self.closed = False
+        _FakeProvider.instances.append(self)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _app_with_codex_enabled(tmp_path: Path, monkeypatch) -> tuple[TestClient, BridgeService, Path]:
+    import stream_micro.bridge as bridge_module
+
+    _FakeProvider.instances = []
+    monkeypatch.setattr(bridge_module, "CodexPlugin", _FakeProvider)
+    config_path = tmp_path / "control.yaml"
+    data = control_config_data(default_control_config())
+    data["plugins"]["codex"] = {"enabled": True, "codex_path": None, "codex_home": None}
+    write_control_config(config_path, parse_control_config(data))
+    app = create_app(config_path)
+    return TestClient(app), cast(BridgeService, app.state.bridge), config_path
+
+
+def test_layout_only_save_keeps_running_providers(tmp_path: Path, monkeypatch) -> None:
+    client, service, _path = _app_with_codex_enabled(tmp_path, monkeypatch)
+    with client:
+        codex = service.plugins["codex"]
+        data = client.get("/api/config").json()
+        data["stream_deck"]["brightness"] = 55
+        assert client.put("/api/config", json=data).status_code == 200
+        assert service.plugins["codex"] is codex
+        assert not cast(_FakeProvider, codex).closed
+
+        data["plugins"]["codex"]["codex_home"] = str(tmp_path)
+        assert client.put("/api/config", json=data).status_code == 200
+        assert service.plugins["codex"] is not codex
+        assert cast(_FakeProvider, codex).closed
+
+
+def test_providers_built_before_a_failing_one_are_closed(tmp_path: Path, monkeypatch) -> None:
+    client, service, path = _app_with_codex_enabled(tmp_path, monkeypatch)
+    before = path.read_text(encoding="utf-8")
+    with client:
+        data = client.get("/api/config").json()
+        data["plugins"]["codex"]["codex_home"] = str(tmp_path)  # forces a new Codex provider
+        data["plugins"]["claude_code"] = {"enabled": True, "bogus": 1}  # then Claude fails
+        assert client.put("/api/config", json=data).status_code == 422
+
+        new_codex = _FakeProvider.instances[-1]
+        assert new_codex is not service.plugins["codex"]
+        assert new_codex.closed
+        assert not cast(_FakeProvider, service.plugins["codex"]).closed
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_failed_write_keeps_the_running_config_and_providers(tmp_path: Path, monkeypatch) -> None:
+    import stream_micro.bridge as bridge_module
+
+    client, service, _path = _app_with_codex_enabled(tmp_path, monkeypatch)
+    running_config, running_codex = service.config, service.plugins["codex"]
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(bridge_module, "write_control_config", fail_write)
+    data = control_config_data(service.config)
+    data["plugins"]["codex"]["codex_home"] = str(tmp_path)
+    with pytest.raises(OSError):
+        service.replace_config(data)
+
+    assert service.config is running_config
+    assert service.plugins["codex"] is running_codex
+    assert not cast(_FakeProvider, running_codex).closed
+    assert _FakeProvider.instances[-1].closed  # the replacement that never went live
+
+
+def test_concurrent_saves_run_one_at_a_time(tmp_path: Path, monkeypatch) -> None:
+    import threading
+    import time
+
+    from stream_micro.bridge import BridgeService
+
+    client, service, _path = _app_with_codex_enabled(tmp_path, monkeypatch)
+    original = BridgeService._build_plugins
+    active, peak = [0], [0]
+    lock = threading.Lock()
+
+    def slow_build(*args, **kwargs):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(0.2)  # long enough that unserialized saves would overlap
+        try:
+            return original(*args, **kwargs)
+        finally:
+            with lock:
+                active[0] -= 1
+
+    monkeypatch.setattr(BridgeService, "_build_plugins", staticmethod(slow_build))
+    first = control_config_data(service.config)
+    second = control_config_data(service.config)
+    second["plugins"]["codex"]["codex_home"] = str(tmp_path)
+    threads = [
+        threading.Thread(target=service.replace_config, args=(data,)) for data in (first, second)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert peak[0] == 1
+    assert not cast(_FakeProvider, service.plugins["codex"]).closed
+
+
+def test_only_the_bridge_page_may_save_settings(tmp_path: Path) -> None:
+    config_path = tmp_path / "control.yaml"
+    write_control_config(config_path, default_control_config())
+    app = create_app(config_path)
+    with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+        data = client.get("/api/config").json()
+        own = {"Origin": "http://127.0.0.1:8766"}
+        assert client.put("/api/config", json=data, headers=own).status_code == 200
+        assert client.put("/api/config", json=data).status_code == 200  # a script
+        other = {"Origin": "http://evil.example"}
+        assert client.put("/api/config", json=data, headers=other).status_code == 403
+    rebound = TestClient(create_app(config_path), base_url="http://evil.example:8766")
+    with rebound as client:
+        headers = {"Origin": "http://evil.example:8766"}  # its own Host, but not loopback
+        assert client.put("/api/config", json=data, headers=headers).status_code == 403
+

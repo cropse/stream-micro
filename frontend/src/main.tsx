@@ -143,6 +143,16 @@ function OllamaQuotaCard({ config, snapshot, updateConfig }: {
         />
       </label>
       <p className="ollama-hint">{pluginConfig?.cookie_configured ? "The saved cookie stays in the local Bridge and is never returned to this page." : <>Sign in at ollama.com, open DevTools → Application → Cookies, copy the <code>__Secure-session</code> value.</>}</p>
+      <details className="ollama-advanced">
+        <summary>How to get the cookie</summary>
+        <ol className="cookie-steps">
+          <li>Sign in at <code>ollama.com</code> in Chrome or Edge with the account to show.</li>
+          <li>Press <code>F12</code> to open DevTools and choose the <b>Application</b> tab (in Firefox: <b>Storage</b>).</li>
+          <li>Under <b>Cookies</b>, select <code>https://ollama.com</code>.</li>
+          <li>Find <code>__Secure-session</code> and copy its <b>Value</b>; paste it above and Save.</li>
+          <li>The <b>Expires / Max-Age</b> column there shows until when it works. Signing out of ollama.com ends it early; when it stops working this card says so, and you paste a new one.</li>
+        </ol>
+      </details>
     </div>
     <details className="ollama-advanced">
       <summary>Advanced settings</summary>

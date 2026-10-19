@@ -6,13 +6,23 @@ from collections.abc import Callable
 
 from .config import AppConfig
 from .device import DeviceError, StreamDeckOutput
-from .renderer import render_error_key, render_quota_key
+from .renderer import render_blank_key, render_error_key, render_quota_key
 from .scraper import ScrapeError, fetch_quota
 
 
 def update_once(config: AppConfig, output: StreamDeckOutput) -> None:
     snapshot = fetch_quota(config.ollama)
     size = output.key_size
+    if snapshot.session is None or snapshot.weekly is None:
+        # Monthly-credit plans have a single window: show it on the first key.
+        monthly = snapshot.monthly
+        assert monthly is not None
+        output.set_key(
+            config.stream_deck.session_key_index,
+            render_quota_key(monthly, "MONTH", config.display, size),
+        )
+        output.set_key(config.stream_deck.weekly_key_index, render_blank_key(config.display, size))
+        return
     output.set_key(
         config.stream_deck.session_key_index,
         render_quota_key(snapshot.session, "5H", config.display, size),

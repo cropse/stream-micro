@@ -6,6 +6,8 @@ the Bridge is being introduced.  The `serve` command will use this contract.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -308,8 +310,15 @@ def write_control_config(path: Path | str, config: ControlConfig) -> None:
     validate_control_config(config)
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = config_path.with_suffix(f"{config_path.suffix}.tmp")
-    temporary.write_text(
-        yaml.safe_dump(control_config_data(config), sort_keys=False), encoding="utf-8"
+    # A unique temporary name, so two writers never share one file.
+    fd, name = tempfile.mkstemp(
+        prefix=f".{config_path.name}.", suffix=".tmp", dir=config_path.parent
     )
-    temporary.replace(config_path)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(yaml.safe_dump(control_config_data(config), sort_keys=False))
+        temporary.replace(config_path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise

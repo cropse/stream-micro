@@ -8,6 +8,7 @@ from enum import Enum
 class WindowKind(str, Enum):
     SESSION = "session"
     WEEKLY = "weekly"
+    MONTHLY = "monthly"
 
 
 @dataclass(frozen=True)
@@ -23,5 +24,12 @@ class QuotaWindow:
 
 @dataclass(frozen=True)
 class QuotaSnapshot:
-    session: QuotaWindow
-    weekly: QuotaWindow
+    """Ollama usage: the 5-hour and weekly windows, or (newer plans) monthly credits."""
+
+    session: QuotaWindow | None = None
+    weekly: QuotaWindow | None = None
+    monthly: QuotaWindow | None = None
+
+    def __post_init__(self) -> None:
+        if self.monthly is None and (self.session is None or self.weekly is None):
+            raise ValueError("a quota snapshot needs session and weekly, or monthly")

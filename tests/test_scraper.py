@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from stream_micro.config import OllamaConfig
+from stream_micro.models import WindowKind
 from stream_micro.scraper import (
     ExpiredCookieError,
     ScrapeError,
@@ -124,3 +125,26 @@ def test_visible_fallback_ignores_unrelated_earlier_labels_and_times() -> None:
 
     assert snapshot.session.reset_at == datetime(2026, 7, 30, 10, 0, tzinfo=timezone.utc)
     assert snapshot.weekly.reset_at == datetime(2026, 8, 4, 10, 0, tzinfo=timezone.utc)
+
+
+# Newer plans: monthly credits instead of 5-hour/weekly windows (made-up numbers).
+MONTHLY_HTML = """
+<div><span>Monthly credits</span><span>$53.41</span></div>
+<p>Refills to $60 on November 14, 2026. Unused monthly credits do not carry over.</p>
+<div role="progressbar" aria-label="Monthly credits used: $6.59 of $60"></div>
+"""
+
+
+def test_monthly_credit_plans_are_read_with_their_refill_date() -> None:
+    snapshot = parse_quota_page(MONTHLY_HTML)
+
+    assert snapshot.session is None and snapshot.weekly is None
+    assert snapshot.monthly is not None
+    assert snapshot.monthly.kind == WindowKind.MONTHLY
+    assert round(snapshot.monthly.percent_used, 2) == 10.98
+    assert snapshot.monthly.reset_at == datetime(2026, 11, 14, tzinfo=timezone.utc)
+
+
+def test_a_page_with_no_quota_at_all_still_fails() -> None:
+    with pytest.raises(ScrapeError, match="session, weekly"):
+        parse_quota_page("<p>Settings</p>")

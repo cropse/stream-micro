@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -11,6 +13,7 @@ from typing import Any
 from .control_config import (
     ButtonBinding,
     ControlConfig,
+    ControlConfigError,
     control_config_data,
     load_control_config,
     parse_control_config,
@@ -62,6 +65,9 @@ class BridgeService:
     ) -> None:
         self.config_path = Path(config_path)
         self.config = load_control_config(self.config_path)
+        # One save at a time: each save builds, writes, publishes, then closes
+        # the providers it replaced; interleaved saves could close a live one.
+        self._save_lock = threading.Lock()
         self.openchamber = None if plugins is not None else discover_openchamber_desktop()
         self.plugins = plugins or self._build_plugins(self.config, self.openchamber)
         self.selected_session_id: str | None = None
@@ -86,27 +92,56 @@ class BridgeService:
 
     @staticmethod
     def _build_plugins(
-        config: ControlConfig, openchamber: OpenChamberDesktop | None = None
+        config: ControlConfig,
+        openchamber: OpenChamberDesktop | None = None,
+        *,
+        previous: tuple[ControlConfig, dict[str, BridgePlugin]] | None = None,
     ) -> dict[str, BridgePlugin]:
+        """Build enabled providers, reusing ones whose settings did not change.
+
+        ``previous`` is the running config and providers: reusing them keeps
+        app-server processes, hook state, and quota caches alive across
+        layout-only saves.
+        """
+
         plugins: dict[str, BridgePlugin] = {}
-        open_code = config.plugins.get("opencode")
-        if open_code and open_code.get("enabled", True):
-            open_code_config = dict(open_code)
-            if openchamber is not None:
-                configured = open_code_config.get("endpoints", [])
-                open_code_config["endpoints"] = list(
-                    dict.fromkeys([openchamber.opencode_proxy_url, *configured])
-                )
-            plugins["opencode"] = OpenCodePlugin(open_code_config)
-        ollama = config.plugins.get("ollama_quota")
-        if ollama is not None:
-            plugins["ollama_quota"] = OllamaQuotaPlugin(ollama)
-        codex = config.plugins.get("codex")
-        if codex and codex.get("enabled", False):
-            plugins["codex"] = CodexPlugin(codex)
-        claude_code = config.plugins.get("claude_code")
-        if claude_code and claude_code.get("enabled", False):
-            plugins["claude_code"] = ClaudeCodePlugin(claude_code)
+        created: dict[str, BridgePlugin] = {}
+
+        def add(plugin_id: str, build: Callable[[], BridgePlugin]) -> None:
+            if previous is not None:
+                old_config, old_plugins = previous
+                if (
+                    plugin_id in old_plugins
+                    and old_config.plugins.get(plugin_id) == config.plugins.get(plugin_id)
+                ):
+                    plugins[plugin_id] = old_plugins[plugin_id]
+                    return
+            plugins[plugin_id] = created[plugin_id] = build()
+
+        try:
+            open_code = config.plugins.get("opencode")
+            if open_code and open_code.get("enabled", True):
+                open_code_config = dict(open_code)
+                if openchamber is not None:
+                    configured = open_code_config.get("endpoints", [])
+                    open_code_config["endpoints"] = list(
+                        dict.fromkeys([openchamber.opencode_proxy_url, *configured])
+                    )
+                add("opencode", lambda: OpenCodePlugin(open_code_config))
+            ollama = config.plugins.get("ollama_quota")
+            if ollama is not None:
+                add("ollama_quota", lambda: OllamaQuotaPlugin(ollama))
+            codex = config.plugins.get("codex")
+            if codex and codex.get("enabled", False):
+                add("codex", lambda: CodexPlugin(codex))
+            claude_code = config.plugins.get("claude_code")
+            if claude_code and claude_code.get("enabled", False):
+                add("claude_code", lambda: ClaudeCodePlugin(claude_code))
+        except Exception:
+            # Do not leak providers (e.g. a started Codex app-server) built before
+            # a later provider rejected its settings; reused ones keep running.
+            BridgeService._close_plugins(created)
+            raise
         return plugins
 
     def config_data(self) -> dict[str, Any]:
@@ -124,6 +159,10 @@ class BridgeService:
         return data
 
     def replace_config(self, data: dict[str, Any]) -> dict[str, Any]:
+        with self._save_lock:
+            return self._replace_config(data)
+
+    def _replace_config(self, data: dict[str, Any]) -> dict[str, Any]:
         normalized = deepcopy(data)
         ollama = normalized.get("plugins", {}).get("ollama_quota")
         if isinstance(ollama, dict):
@@ -133,11 +172,30 @@ class BridgeService:
                 if isinstance(existing, str) and existing:
                     ollama["cookie_value"] = existing
         config = parse_control_config(normalized)
-        write_control_config(self.config_path, config)
+        # Build (and so validate) the new providers before touching the saved
+        # file, so an invalid provider setting leaves the running Bridge as-is.
         old_plugins = self.plugins
+        try:
+            plugins = self._build_plugins(
+                config, self.openchamber, previous=(self.config, old_plugins)
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise ControlConfigError(str(exc)) from exc
+        reused = {id(plugin) for plugin in plugins.values()} & {
+            id(plugin) for plugin in old_plugins.values()
+        }
+        try:
+            write_control_config(self.config_path, config)
+        except Exception:
+            self._close_plugins(
+                {key: plugin for key, plugin in plugins.items() if id(plugin) not in reused}
+            )
+            raise
         self.config = config
-        self.plugins = self._build_plugins(config, self.openchamber)
-        self._close_plugins(old_plugins)
+        self.plugins = plugins
+        self._close_plugins(
+            {key: plugin for key, plugin in old_plugins.items() if id(plugin) not in reused}
+        )
         enabled = set(self.plugins)
         self.selected_session_ids = {
             plugin_id: session_id

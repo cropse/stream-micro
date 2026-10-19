@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -19,6 +20,27 @@ from .device import DeviceError, discover_mk2_devices
 from .plugins.claude_code import ClaudeCodeError
 from .plugins.codex import CodexError
 from .plugins.opencode import OpenCodeError
+
+_LOOPBACK_NAMES = ("127.0.0.1", "localhost", "::1")
+
+
+def own_page_only(request: Request) -> None:
+    """Refuse a browser request that comes from another site or a rebound name.
+
+    Browsers send Origin with every PUT; it must be this page's own, and the
+    Host a loopback name, so a page that rebinds its DNS name to 127.0.0.1
+    cannot change settings. Requests without Origin (scripts, tests) pass.
+    """
+
+    origin = request.headers.get("origin")
+    if origin is None:
+        return
+    host = request.headers.get("host", "")
+    name = host[1 : host.find("]")] if host.startswith("[") else host.split(":")[0]
+    if name not in _LOOPBACK_NAMES or origin not in (f"http://{host}", f"https://{host}"):
+        raise HTTPException(
+            status_code=403, detail="Only this Bridge's own dashboard may change its settings"
+        )
 
 
 def create_app(config_path: Path | str, *, service: BridgeService | None = None) -> FastAPI:
@@ -39,7 +61,8 @@ def create_app(config_path: Path | str, *, service: BridgeService | None = None)
         return service.public_config_data()
 
     @app.put("/api/config")
-    def put_config(data: dict[str, Any]) -> dict[str, Any]:
+    def put_config(data: dict[str, Any], request: Request) -> dict[str, Any]:
+        own_page_only(request)
         try:
             return service.replace_config(data)
         except ControlConfigError as exc:
@@ -164,6 +187,10 @@ def create_app(config_path: Path | str, *, service: BridgeService | None = None)
 
     dashboard_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if (dashboard_dir / "index.html").is_file():
+        # Windows registry entries can map .js to text/plain, which browsers reject
+        # for module scripts.
+        mimetypes.add_type("text/javascript", ".js")
+        mimetypes.add_type("text/css", ".css")
         app.mount("/", StaticFiles(directory=dashboard_dir, html=True), name="dashboard")
 
     return app

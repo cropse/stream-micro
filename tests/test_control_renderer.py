@@ -54,8 +54,12 @@ def test_session_title_wraps_to_two_lines_before_truncating() -> None:
         84,
     )
 
-    assert title.count("\n") == 1
-    assert "Section" in title
+    first, second = title.split("\n")
+    assert first and second
+    # Whatever the installed font, the two lines are the title's opening words
+    # in order, the second carrying on from the first before it is truncated.
+    shown = " ".join(title.replace("…", " ").split())
+    assert "A deliberately long Section title that must fit".startswith(shown)
 
 
 def test_claude_code_session_uses_its_provider_accent() -> None:
