@@ -42,8 +42,11 @@ _PROVIDER_STYLES = {
     "codex": ("CODEX", "#0b1f1c", "#48e0b4"),
     "opencode": ("OPENCODE", "#142038", "#8aa7ff"),
     "ollama_quota": ("OLLAMA", "#181a2b", "#b69cff"),
+    "cliproxy_quota": ("PROXY", "#101827", "#8292aa"),
     "http_quota": ("USAGE", "#14181f", "#f2b880"),
 }
+# A pooled account takes the colours of the service it belongs to.
+_ACCOUNT_STYLES = {"codex": "codex", "claude": "claude_code"}
 
 QUOTA_DISPLAY_MODES = ("remaining", "used")
 _STALE_COLOR = "#6f8099"
@@ -387,10 +390,11 @@ def quota_source(binding: ButtonBinding, snapshot: PluginSnapshot | None) -> Quo
             connected = snapshot.health.connected
             detail = "Account not found" if connected else snapshot.health.detail
             return QuotaSource(None, detail, None, binding.plugin)
+        style = _ACCOUNT_STYLES.get(account.provider, binding.plugin)
         if not account.signals:
             problem = account.error or "No quota data"
-            return QuotaSource(None, problem, account.title, binding.plugin)
-        return QuotaSource(account.signals, None, account.title, binding.plugin)
+            return QuotaSource(None, problem, account.title, style)
+        return QuotaSource(account.signals, None, account.title, style)
     signals = snapshot.signals
     if not snapshot.health.connected and not (signals and signals.get("stale")):
         return QuotaSource(None, snapshot.health.detail, None, binding.plugin)

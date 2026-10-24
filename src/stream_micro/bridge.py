@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections.abc import Callable
 from copy import deepcopy
@@ -29,6 +30,7 @@ from .openchamber import (
 from .plugins.antigravity import AntigravityPlugin
 from .plugins.base import AgentSession, BridgePlugin, PluginSnapshot
 from .plugins.claude_code import ClaudeCodePlugin
+from .plugins.cliproxy_quota import CliProxyQuotaPlugin, validate_cliproxy_quota_config
 from .plugins.codex import CodexPlugin
 from .plugins.http_quota import (
     HttpQuotaError,
@@ -164,6 +166,14 @@ class BridgeService:
                 add("antigravity", lambda: AntigravityPlugin(antigravity))
             # Optional quota sources: validated even while disabled, started
             # only when enabled.
+            cliproxy = config.plugins.get("cliproxy_quota")
+            if cliproxy is not None:
+                validate_cliproxy_quota_config(cliproxy)
+                if cliproxy.get("enabled", False):
+                    add(
+                        "cliproxy_quota",
+                        lambda: CliProxyQuotaPlugin(with_cache(cliproxy, "cliproxy_quota.json")),
+                    )
             http_quota = config.plugins.get("http_quota")
             if http_quota is not None:
                 try:
@@ -199,6 +209,19 @@ class BridgeService:
             cookie = ollama.get("cookie_value")
             ollama["cookie_configured"] = isinstance(cookie, str) and bool(cookie)
             ollama["cookie_value"] = ""
+        cliproxy = data.get("plugins", {}).get("cliproxy_quota")
+        if isinstance(cliproxy, dict):
+            key = cliproxy.get("management_key")
+            env_name = cliproxy.get("management_key_env")
+            cliproxy["management_key_configured"] = isinstance(key, str) and bool(key)
+            cliproxy["management_key"] = ""
+            # Which key is actually used, without revealing it.
+            if isinstance(env_name, str) and env_name and os.environ.get(env_name):
+                cliproxy["management_key_source"] = "environment"
+            else:
+                cliproxy["management_key_source"] = (
+                    "saved" if cliproxy["management_key_configured"] else "missing"
+                )
         http_quota = data.get("plugins", {}).get("http_quota")
         sources = http_quota.get("sources") if isinstance(http_quota, dict) else None
         for source in sources if isinstance(sources, list) else []:
@@ -221,6 +244,32 @@ class BridgeService:
                 existing = self.config.plugins.get("ollama_quota", {}).get("cookie_value")
                 if isinstance(existing, str) and existing:
                     ollama["cookie_value"] = existing
+        cliproxy = normalized.get("plugins", {}).get("cliproxy_quota")
+        if isinstance(cliproxy, dict):
+            # A blank key from the dashboard means "keep the saved one" while the
+            # URL is unchanged (a key is never sent to another host); send
+            # management_key_configured: false to clear it.
+            cliproxy.pop("management_key_source", None)
+            configured = cliproxy.pop("management_key_configured", False)
+            before = self.config.plugins.get("cliproxy_quota", {})
+            same_url = str(before.get("base_url") or "").rstrip("/") == str(
+                cliproxy.get("base_url") or ""
+            ).rstrip("/")
+            if (
+                not same_url
+                and cliproxy.get("management_key_env")
+                and cliproxy.get("management_key_env") == before.get("management_key_env")
+            ):
+                # As for usage-API sources: the variable named for the old proxy is
+                # not sent to a new one unless it is named again for it.
+                cliproxy["management_key_env"] = None
+            if not cliproxy.get("management_key") and configured is True and same_url:
+                existing = before.get("management_key")
+                cliproxy["management_key"] = (
+                    existing if isinstance(existing, str) and existing else None
+                )
+            elif not cliproxy.get("management_key"):
+                cliproxy["management_key"] = None
         http_quota = normalized.get("plugins", {}).get("http_quota")
         sources = http_quota.get("sources") if isinstance(http_quota, dict) else None
         if isinstance(sources, list):

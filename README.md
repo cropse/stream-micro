@@ -159,6 +159,41 @@ state and quota can reach Bridge. Stream Micro reads or sends no prompts,
 history, transcripts, or credentials. If the CLI, cache, or status data is
 absent, the provider safely shows as unavailable.
 
+### CLIProxyAPI pool quota (optional)
+
+Disabled by default and configured in the Dashboard's Configuration page.
+`cliproxy_quota` shows the Codex and Claude quota of every account pooled in a
+self-hosted [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
+server; on a quota key, pick one of its accounts as the **Account** in
+Buttons. One proxy per Bridge.
+
+- The Bridge asks the proxy's management API for its accounts and has the
+  proxy call each account's usage endpoint (`/v0/management/api-call` with
+  `$TOKEN$`), so **account tokens never leave the proxy**; the Bridge stores
+  only the management key.
+- Those usage endpoints (`chatgpt.com/backend-api/wham/usage`,
+  `api.anthropic.com/api/oauth/usage`) are **not documented public APIs**;
+  see the note in `docs/research/claude-code-quota-access.md`.
+- The management key is stored like the Ollama cookie and never returned to
+  the Dashboard; `management_key_env` reads it from an environment variable
+  instead. Plain `http://` to another machine needs
+  `allow_insecure_http: true`, because the key would cross the network
+  unencrypted. This differs from usage-API sources, which always require
+  `https://` off-machine: a self-hosted proxy on a home network often has no
+  TLS, so the opt-in exists and the Dashboard shows a warning. A changed
+  `base_url` keeps neither the saved key nor `management_key_env`: enter them
+  again for the new proxy.
+- Last-seen numbers are kept in `.state/` and shown in grey while the proxy
+  is unreachable.
+
+```yaml
+plugins:
+  cliproxy_quota:
+    enabled: true
+    base_url: https://proxy.example:8317
+    management_key: null          # set it in the Dashboard (stored, never shown)
+    providers: [codex, claude]
+```
 
 ### Usage API quota (optional)
 

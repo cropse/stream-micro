@@ -26,6 +26,17 @@ type OllamaQuotaConfig = {
 type CodexConfig = { enabled?: boolean; codex_path?: string | null; codex_home?: string | null };
 type ClaudeCodeConfig = { enabled?: boolean; claude_path?: string | null; claude_home?: string | null; plugin_dir?: string | null; max_sessions?: number };
 type AntigravityConfig = { enabled?: boolean; agy_path?: string | null; agy_home?: string | null; max_sessions?: number };
+type CliProxyQuotaConfig = {
+  enabled?: boolean;
+  base_url?: string;
+  management_key?: string | null;
+  management_key_configured?: boolean;
+  management_key_env?: string | null;
+  management_key_source?: "environment" | "saved" | "missing";
+  allow_insecure_http?: boolean;
+  providers?: string[];
+  refresh_interval_seconds?: number;
+};
 type UsageWindow = {
   label?: string;
   used_percent?: string;
@@ -179,6 +190,7 @@ const PROVIDER_ACCENTS: Record<string, string> = {
   codex: "#48e0b4",
   opencode: "#8aa7ff",
   ollama_quota: "#b69cff",
+  cliproxy_quota: "#8292aa",
   http_quota: "#f2b880",
 };
 const COLOR_SWATCHES = ["#4a9eff", "#8aa7ff", "#b794ff", "#48e0b4", "#4de57a", "#166534", "#ffc15a", "#f2b880", "#e28b67", "#ff7983", "#ffffff", "#8292aa"];
@@ -206,6 +218,7 @@ const PROVIDER_BACKGROUNDS: Record<string, string> = {
   codex: "#0b1f1c",
   opencode: "#142038",
   ollama_quota: "#181a2b",
+  cliproxy_quota: "#101827",
   http_quota: "#14181f",
 };
 
@@ -278,6 +291,9 @@ function UsageBars({ signals, generic = false, display = "remaining" }: {
 const FIX_HINTS: [RegExp, string][] = [
   [/No cookie value configured/, "Paste the cookie above, then Save."],
   [/cookie is expired or invalid/, "Sign in at ollama.com again and paste a new cookie (see How to get the cookie)."],
+  [/management key rejected/, "Copy the management key from CLIProxyAPI's settings and paste it again."],
+  [/Management key is not configured/, "Paste the management key above, then Save."],
+  [/Proxy unreachable/, "Check that the proxy is running and the URL is right."],
   [/Claude Code was not found/, "Install Claude Code, or set its executable under Advanced settings."],
   [/^key rejected$/, "Paste the key again; it may have been revoked."],
   [/^needs a key$/, "Paste the API key above, then Save."],
@@ -339,6 +355,74 @@ function PlanQuotaCard({ kicker, title, snapshot, display, note }: {
     <QuotaCardHead kicker={kicker} title={title} billing="monthly" />
     {snapshot?.signals ? <UsageBars signals={snapshot.signals} generic display={display} /> : <small className="usage-empty">{t("No quota numbers yet.")}</small>}
     <p className="ollama-hint">{note}</p>
+  </section>;
+}
+
+function CliProxyQuotaCard({ config, snapshot, updateConfig }: {
+  config: Config | null;
+  snapshot?: PluginSnapshot;
+  updateConfig: (change: (current: Config) => Config) => void;
+}) {
+  const pluginConfig = config?.plugins?.cliproxy_quota as CliProxyQuotaConfig | undefined;
+  const display = config?.stream_deck.quota_display ?? "remaining";
+  const providers = pluginConfig?.providers ?? ["codex", "claude"];
+  const setFields = (fields: Partial<CliProxyQuotaConfig>) => {
+    updateConfig((current) => ({
+      ...current,
+      plugins: { ...current.plugins, cliproxy_quota: { ...current.plugins.cliproxy_quota, ...fields } },
+    }));
+  };
+  const url = pluginConfig?.base_url ?? "";
+  const plainHttpToAnotherMachine = /^http:\/\//i.test(url) && !/^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(url);
+  const keySource = pluginConfig?.management_key_source ?? "missing";
+  const toggleProvider = (provider: string, on: boolean) => {
+    const next = on ? [...new Set([...providers, provider])] : providers.filter((item) => item !== provider);
+    if (next.length) setFields({ providers: next });
+  };
+  // The last checked type cannot be unchecked: the Bridge needs at least one.
+  const lastChecked = (provider: string) => providers.length === 1 && providers.includes(provider);
+  const lastCheckedTitle = t("At least one account type must stay checked.");
+  return <section className="panel provider-card cliproxy-card quota-card">
+    <QuotaCardHead kicker={t("CLIPROXYAPI POOL")} title={t("Per-account quota")} billing="monthly" />
+    <label>{t("Proxy URL")}
+      <input type="text" placeholder="https://proxy.example:8317" value={url} onChange={(event) => setFields({ base_url: event.target.value })} />
+    </label>
+    {plainHttpToAnotherMachine && <label className="toggle-field warning-field"><input type="checkbox" checked={pluginConfig?.allow_insecure_http ?? false} onChange={(event) => setFields({ allow_insecure_http: event.target.checked })} /> {t("Allow plain HTTP: the management key crosses the network unencrypted. Prefer https:// (for example a TLS reverse proxy).")}</label>}
+    <div className="ollama-cookie-field">
+      <label>{t("Management key")}
+        <input
+          type="password"
+          placeholder={pluginConfig?.management_key_configured ? t("Key saved — enter a new value to replace it") : t("CLIProxyAPI remote-management secret key")}
+          value={pluginConfig?.management_key ?? ""}
+          onChange={(event) => setFields({ management_key: event.target.value })}
+        />
+      </label>
+      <p className="ollama-hint">
+        {keySource === "environment" && (isZh() ? <>使用環境變數 <code>{pluginConfig?.management_key_env}</code> 的金鑰，它優先於已存的金鑰。</> : <>Using the key from the <code>{pluginConfig?.management_key_env}</code> environment variable; it takes precedence over a saved key. </>)}
+        {keySource === "saved" && t("Using the saved key. It stays in the local Bridge and is never returned to this page. ")}
+        {keySource === "missing" && t("Used only to ask the proxy for each pooled account's usage; account tokens never leave the proxy. ")}
+        {pluginConfig?.management_key_configured && <button type="button" className="link-button" onClick={() => setFields({ management_key: "", management_key_configured: false })}>{t("Forget saved key")}</button>}
+      </p>
+    </div>
+    <details className="ollama-advanced">
+      <summary>{t("Advanced settings")}</summary>
+      <label className="toggle-field"><input type="checkbox" checked={providers.includes("codex")} disabled={lastChecked("codex")} title={lastChecked("codex") ? lastCheckedTitle : undefined} onChange={(event) => toggleProvider("codex", event.target.checked)} /> {t("Codex accounts")}</label>
+      <label className="toggle-field"><input type="checkbox" checked={providers.includes("claude")} disabled={lastChecked("claude")} title={lastChecked("claude") ? lastCheckedTitle : undefined} onChange={(event) => toggleProvider("claude", event.target.checked)} /> {t("Claude accounts")}</label>
+      <label>{t("Key from environment variable")}
+        <input type="text" placeholder={t("Optional, e.g. CLIPROXY_MANAGEMENT_KEY")} value={pluginConfig?.management_key_env ?? ""} onChange={(event) => setFields({ management_key_env: event.target.value || null })} />
+      </label>
+      <label>{t("Refresh interval (seconds)")}
+        <input type="number" min={30} value={pluginConfig?.refresh_interval_seconds ?? 300} onChange={(event) => setFields({ refresh_interval_seconds: Number(event.target.value) })} />
+      </label>
+    </details>
+    <Health health={snapshot?.health} />
+    {snapshot?.accounts?.length ? <div className="account-list">
+      {snapshot.accounts.map((account) => <div key={account.id} className="account-item">
+        <b>{account.title}</b>
+        <small>{account.id}{account.signals?.stale ? ` · ${t("last seen, not current")}` : ""}{account.error ? ` · ${tDetail(account.error)}` : ""}</small>
+        {account.signals && <UsageBars signals={account.signals} generic display={display} />}
+      </div>)}
+    </div> : <p className="provider-note">{snapshot?.health.connected ? t("The proxy has no matching accounts. Check the account types under Advanced settings, or add accounts in CLIProxyAPI.") : t("Accounts appear here after the first refresh.")} {t("Then choose an account on each CLIProxyAPI quota key in Buttons.")}</p>}
   </section>;
 }
 
@@ -847,7 +931,7 @@ type ServiceChoice = { id: string; group: ServiceGroup; name: string; needs: str
 type ResetThresholds = { "7D"?: number; MO?: number };
 // Usage-API presets that only report a balance: no reset to show early.
 const BALANCE_PRESETS = new Set(["deepseek", "moonshot", "moonshot_cn", "siliconflow", "siliconflow_intl", "novita", "openrouter_credits"]);
-const QUOTA_SERVICES = new Set(["claude_code", "codex", "ollama_quota"]);
+const QUOTA_SERVICES = new Set(["claude_code", "codex", "cliproxy_quota", "ollama_quota"]);
 
 // `service` is "default" (every key) or a service ("claude_code", "http_quota:<source id>").
 function ResetEarly({ config, updateConfig, service }: {
@@ -902,6 +986,7 @@ const PLUGIN_SERVICES: { id: string; group: ServiceGroup; name: string; billing?
   { id: "codex", group: "agent", name: "Codex", needs: "Nothing: uses the codex installed on this computer." },
   { id: "opencode", group: "agent", name: "OpenCode", needs: "A running OpenCode server." },
   { id: "antigravity", group: "agent", name: "Antigravity", needs: "Antigravity installed on this computer." },
+  { id: "cliproxy_quota", group: "monthly", name: "CLIProxyAPI pool", billing: "monthly", needs: "The proxy URL and its management key." },
   { id: "ollama_quota", group: "monthly", name: "Ollama Cloud (session cookie)", billing: "monthly", needs: "A cookie copied from the browser. The API key choice is easier." },
 ];
 const SERVICE_GROUPS: [ServiceGroup, string][] = [["agent", "Agent chats"], ["monthly", "Monthly plans"], ["payg", "Pay as you go and custom"]];
@@ -1207,17 +1292,32 @@ function App() {
     const signals = snapshot?.signals;
     const sessions = snapshot?.sessions?.length ?? 0;
     const parts: string[] = [];
+    // A connected proxy whose accounts all fail is not "Working"; some failing is "stale".
+    let poolStatus: ServiceStatus | undefined;
+    let poolProblem: string | undefined;
     if (spec.group === "agent") parts.push(t("{n} chats", { n: sessions }));
-    const quota = quotaSummary(signals, quotaDisplay);
-    if (quota) parts.push(quota);
-    if (signals?.stale && typeof signals.seen_at === "string") parts.push(t("last read {time}", { time: formatReset(signals.seen_at) }));
+    if (spec.id === "cliproxy_quota") {
+      const accounts = snapshot?.accounts ?? [];
+      parts.push(t("{n} accounts", { n: accounts.length }));
+      const trouble = accounts.filter((account) => account.error).length;
+      if (trouble) parts.push(t("{n} need attention", { n: trouble }));
+      if (health?.connected && trouble) {
+        poolStatus = trouble === accounts.length ? "error" : "stale";
+        poolProblem = accounts.find((account) => account.error)?.error ?? undefined;
+      }
+    } else {
+      const quota = quotaSummary(signals, quotaDisplay);
+      if (quota) parts.push(quota);
+      if (signals?.stale && typeof signals.seen_at === "string") parts.push(t("last read {time}", { time: formatReset(signals.seen_at) }));
+    }
     const pending = on && !wasOn;
-    const status: ServiceStatus = !on ? "off" : pending ? "pending" : health && !health.connected && !signals?.stale ? "error" : signals?.stale ? "stale" : "ok";
+    const status: ServiceStatus = !on ? "off" : pending ? "pending" : poolStatus ?? (health && !health.connected && !signals?.stale ? "error" : signals?.stale ? "stale" : "ok");
     const detail = {
       claude_code: <><ClaudeSetupCheck setup={claudeSetup} onChange={changeClaudeSetup} skipped={setupSkipped} onSkip={skipSetup} /><PlanQuotaCard kicker="" title="" snapshot={snapshot} display={quotaDisplay} note={t("Claude plan: 5-hour and weekly limits.")} /><ClaudeCodeCard config={config} snapshot={snapshot} updateConfig={updateConfig} /></>,
       codex: <><PlanQuotaCard kicker="" title="" snapshot={snapshot} display={quotaDisplay} note={t("ChatGPT plan of the account signed in to the local codex.")} /><CodexCard config={config} snapshot={snapshot} updateConfig={updateConfig} /></>,
       opencode: <OpenCodeCard config={config} snapshot={snapshot} updateConfig={updateConfig} />,
       antigravity: <AntigravityCard config={config} snapshot={snapshot} updateConfig={updateConfig} />,
+      cliproxy_quota: <CliProxyQuotaCard config={config} snapshot={snapshot} updateConfig={updateConfig} />,
       ollama_quota: <OllamaQuotaCard config={config} snapshot={snapshot} updateConfig={updateConfig} />,
     }[spec.id];
     services.push({
@@ -1228,7 +1328,7 @@ function App() {
       status,
       summary: parts.join(" · "),
       warn: spec.id === "claude_code" && on && setupNeedsWork(claudeSetup, setupSkipped) ? t("Setup incomplete") : undefined,
-      problem: status === "error" ? tDetail(health?.detail) : undefined,
+      problem: status === "error" ? tDetail(poolStatus === "error" ? poolProblem : health?.detail) : undefined,
       dirty: JSON.stringify(config?.plugins?.[spec.id]) !== JSON.stringify(savedConfig?.plugins?.[spec.id]),
       leaving: !on,
       fresh: pending,
@@ -1676,7 +1776,9 @@ function App() {
             const state = session ? stateText(session.state) : (quota ? (quota.problem ? tDetail(quota.problem) : `${quota.amount ?? quotaShown(quota.used ?? 0, quotaDisplay).text}${quota.stale ? ` ${t("(last seen)")}` : ""}`) : snapshot && !snapshot.health.connected ? tDetail(snapshot.health.detail) : button?.action ? displayName(button.action) : t("No action"));
             const stateColor = !session && quota && !quota.problem ? quota.stale ? STALE_COLOR : pctColor(quota.used) : undefined;
             const isPinned = status?.pinned_sessions?.[String(index)]?.plugin === pluginId;
-            const styleId = pluginId ?? "";
+            const accountProvider = quota && button?.action_params.account ? findAccount(snapshot, button.action_params.account)?.provider : undefined;
+            // A pooled account takes its service's look, as on the keys.
+            const styleId = accountProvider === "claude" ? "claude_code" : accountProvider === "codex" ? "codex" : pluginId ?? "";
             const accent = (parent ?? button)?.accent || PROVIDER_ACCENTS[styleId] || undefined;
             const base = pluginId && (session || isQuota || isChild) ? PROVIDER_BACKGROUNDS[styleId] : undefined;
             const tileStyle = {
@@ -1749,7 +1851,7 @@ function App() {
               {(accounts.length > 0 || savedAccount) && <label>{t("Account")}
                 <select value={known?.id ?? savedAccount} onChange={(event) => setQuotaOption("account", event.target.value)}>
                   <option value="">{t("Choose an account")}</option>
-                  {accounts.map((account) => <option key={account.id} value={account.id}>{account.title} · {account.id}{account.signals?.stale ? ` ${t("(last seen)")}` : ""}</option>)}
+                  {accounts.map((account) => <option key={account.id} value={account.id}>{account.title} · {account.id}{account.signals?.stale ? ` ${t("(last seen)")}` : ""}{account.error ? ` · ${tDetail(account.error)}` : ""}</option>)}
                   {savedAccount && !known && <option value={savedAccount}>{savedAccount} {t("(not found right now)")}</option>}
                 </select>
               </label>}

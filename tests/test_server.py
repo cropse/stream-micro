@@ -612,3 +612,155 @@ def test_a_bad_disabled_usage_source_says_why_it_blocks_the_save(tmp_path: Path)
         response = client.put("/api/config", json=public)
     assert response.status_code == 422
     assert "checked even while disabled" in response.text
+
+
+def _proxy_app(tmp_path: Path, **cliproxy) -> tuple[TestClient, BridgeService, Path]:
+    config_path = tmp_path / "control.yaml"
+    data = control_config_data(default_control_config())
+    data["plugins"]["cliproxy_quota"] = {
+        "enabled": False,
+        "base_url": "http://127.0.0.1:9",
+        "management_key": "real-secret",
+        **cliproxy,
+    }
+    write_control_config(config_path, parse_control_config(data))
+    app = create_app(config_path)
+    return TestClient(app), cast(BridgeService, app.state.bridge), config_path
+
+
+def test_management_key_never_reaches_the_browser_and_blank_save_keeps_it(
+    tmp_path: Path,
+) -> None:
+    client, service, config_path = _proxy_app(tmp_path)
+    with client:
+        public = client.get("/api/config").json()
+        section = public["plugins"]["cliproxy_quota"]
+        assert section["management_key"] == ""
+        assert section["management_key_configured"] is True
+        assert "real-secret" not in client.get("/api/config").text
+
+        assert client.put("/api/config", json=public).status_code == 200
+        assert service.config.plugins["cliproxy_quota"]["management_key"] == "real-secret"
+
+        section["management_key_configured"] = False
+        assert client.put("/api/config", json=public).status_code == 200
+        assert service.config.plugins["cliproxy_quota"]["management_key"] is None
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "real-secret" not in config_text
+    assert "management_key_configured" not in config_text
+    assert "management_key_source" not in config_text
+
+
+def test_a_saved_management_key_never_follows_the_proxy_to_another_url(tmp_path: Path) -> None:
+    client, service, _config_path = _proxy_app(tmp_path)
+    with client:
+        public = client.get("/api/config").json()
+        public["plugins"]["cliproxy_quota"]["base_url"] = "http://127.0.0.1:9/"
+        assert client.put("/api/config", json=public).status_code == 200
+        # Only a trailing slash changed: still the same proxy, key kept.
+        assert service.config.plugins["cliproxy_quota"]["management_key"] == "real-secret"
+
+        public = client.get("/api/config").json()
+        public["plugins"]["cliproxy_quota"]["management_key_env"] = "PROXY_KEY_FOR_TEST"
+        assert client.put("/api/config", json=public).status_code == 200
+
+        public = client.get("/api/config").json()
+        public["plugins"]["cliproxy_quota"]["base_url"] = "http://127.0.0.1:10"
+        assert client.put("/api/config", json=public).status_code == 200
+        assert service.config.plugins["cliproxy_quota"]["management_key"] is None
+        # The variable named for the old proxy does not follow it either.
+        assert service.config.plugins["cliproxy_quota"]["management_key_env"] is None
+
+
+def test_a_typed_management_key_replaces_the_saved_one(tmp_path: Path) -> None:
+    client, service, _config_path = _proxy_app(tmp_path)
+    with client:
+        public = client.get("/api/config").json()
+        public["plugins"]["cliproxy_quota"]["management_key"] = "new-secret"
+        assert client.put("/api/config", json=public).status_code == 200
+        assert service.config.plugins["cliproxy_quota"]["management_key"] == "new-secret"
+        assert "new-secret" not in client.get("/api/config").text
+
+
+def test_invalid_disabled_proxy_is_rejected_before_saving(tmp_path: Path) -> None:
+    client, _service, config_path = _proxy_app(tmp_path)
+    before = config_path.read_text(encoding="utf-8")
+    with client:
+        data = client.get("/api/config").json()
+        data["plugins"]["cliproxy_quota"]["base_url"] = "http://user:pw@proxy.test"
+        response = client.put("/api/config", json=data)
+    assert response.status_code == 422
+    assert config_path.read_text(encoding="utf-8") == before
+
+
+def test_layout_only_save_keeps_the_proxy_worker(tmp_path: Path, monkeypatch) -> None:
+    import stream_micro.bridge as bridge_module
+    from stream_micro.plugins.cliproxy_quota import CliProxyQuotaPlugin
+
+    requests: list[httpx.Request] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(503)
+
+    def offline(config):  # no worker thread, no real network
+        return CliProxyQuotaPlugin(
+            config,
+            client=httpx.Client(transport=httpx.MockTransport(record)),
+            start_thread=False,
+        )
+
+    monkeypatch.setattr(bridge_module, "CliProxyQuotaPlugin", offline)
+    client, service, _config_path = _proxy_app(tmp_path)
+    with client:
+        data = client.get("/api/config").json()
+        data["plugins"]["cliproxy_quota"]["enabled"] = True
+        assert client.put("/api/config", json=data).status_code == 200
+        provider = service.plugins["cliproxy_quota"]
+        assert str(getattr(provider, "cache_path", "")).endswith(
+            str(Path(".state") / "cliproxy_quota.json")
+        )
+
+        data = client.get("/api/config").json()
+        data["stream_deck"]["brightness"] = 55
+        assert client.put("/api/config", json=data).status_code == 200
+        assert service.plugins["cliproxy_quota"] is provider
+
+        data = client.get("/api/config").json()
+        data["plugins"]["cliproxy_quota"]["refresh_interval_seconds"] = 120
+        assert client.put("/api/config", json=data).status_code == 200
+        assert service.plugins["cliproxy_quota"] is not provider
+    service.close()
+    assert requests == []
+
+
+def test_a_disabled_proxy_is_not_started(tmp_path: Path) -> None:
+    client, service, _config_path = _proxy_app(tmp_path)
+    with client:
+        assert "cliproxy_quota" not in service.plugins
+
+
+def test_dashboard_learns_which_key_is_used_but_never_the_key(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PROXY_KEY_FOR_TEST", "env-secret")
+    monkeypatch.delenv("PROXY_KEY_MISSING_FOR_TEST", raising=False)
+    client, _service, _path = _proxy_app(tmp_path)
+    with client:
+        section = client.get("/api/config").json()["plugins"]["cliproxy_quota"]
+        assert section["management_key_source"] == "saved"
+
+        data = client.get("/api/config").json()
+        data["plugins"]["cliproxy_quota"]["management_key_env"] = "PROXY_KEY_FOR_TEST"
+        assert client.put("/api/config", json=data).status_code == 200
+        response = client.get("/api/config")
+        assert response.json()["plugins"]["cliproxy_quota"]["management_key_source"] == (
+            "environment"
+        )
+        assert "env-secret" not in response.text and "real-secret" not in response.text
+
+        data = client.get("/api/config").json()
+        section = data["plugins"]["cliproxy_quota"]
+        section["management_key_env"] = "PROXY_KEY_MISSING_FOR_TEST"
+        section["management_key_configured"] = False
+        assert client.put("/api/config", json=data).status_code == 200
+        section = client.get("/api/config").json()["plugins"]["cliproxy_quota"]
+        assert section["management_key_source"] == "missing"
