@@ -211,6 +211,7 @@ select:disabled { cursor: not-allowed; opacity: .6; }
 .account-list { display: grid; gap: 10px; margin-top: 10px; }
 .account-item { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid #263044; border-radius: 8px; }
 .account-item small { color: #8292aa; }
+.cliproxy-card .account-list { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 .link-button { padding: 0; border: 0; background: none; color: #69efc9; font: inherit; text-decoration: underline; cursor: pointer; }
 .warning-field { color: #fbbf24; }
 .usage-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; align-items: end; }
@@ -283,8 +284,10 @@ select:disabled { cursor: not-allowed; opacity: .6; }
 .service-detail .panel { background: none; border: 0; padding: 0; border-radius: 0; min-height: 0; box-shadow: none; }
 .service-detail .quota-card-head, .service-detail .card-keep { display: none !important; }
 .service-detail .provider-card, .service-detail .ollama-card { gap: 12px; }
+.service-detail .cliproxy-card .account-list { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 .service-detail .ollama-health { order: -2; }
 .service-detail .ollama-usage-grid { order: -1; }
+.service-detail .account-item .ollama-usage-grid { order: 0; }
 .service-detail details.ollama-advanced { order: 5; }
 .service-danger { display: flex; justify-content: flex-end; border-top: 1px dashed #26364f; padding-top: 12px; }
 .confirm-line { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; color: #c9d4e3; font-size: 13px; }

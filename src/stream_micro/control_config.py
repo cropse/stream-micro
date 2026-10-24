@@ -124,6 +124,14 @@ def default_control_config() -> ControlConfig:
                 "refresh_interval_seconds": 60.0,
             },
             "codex": {"enabled": False, "codex_path": None, "codex_home": None},
+            "cliproxy_quota": {
+                "enabled": False,
+                "base_url": "",
+                "management_key": None,
+                "management_key_env": None,
+                "allow_insecure_http": False,
+                "providers": ["codex", "claude"],
+            },
             "http_quota": {"enabled": False, "sources": []},
             "claude_code": {
                 "enabled": False,

@@ -31,6 +31,15 @@ plugins:
   http_quota:
     enabled: false
     sources: []
+  cliproxy_quota:
+    enabled: false
+    base_url: ''
+    management_key: null
+    management_key_env: null
+    allow_insecure_http: false
+    providers:
+    - codex
+    - claude
   codex:
     enabled: false
     codex_path: null

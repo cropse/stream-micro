@@ -120,3 +120,12 @@ def test_quota_keys_accept_only_text_account_and_label_options() -> None:
         data["buttons"][5]["action_params"] = bad
         with pytest.raises(ControlConfigError):
             parse_control_config(data)
+
+
+def test_default_config_has_a_disabled_cliproxy_quota_service() -> None:
+    section = default_control_config().plugins["cliproxy_quota"]
+
+    assert section["enabled"] is False
+    assert section["management_key"] is None
+    assert section["allow_insecure_http"] is False
+    assert section["providers"] == ["codex", "claude"]

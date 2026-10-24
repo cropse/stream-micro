@@ -650,3 +650,49 @@ def test_a_long_footer_still_fits_the_key() -> None:
     # Nothing drawn in the outermost pixel columns: the text was shrunk to fit.
     assert all(footer.getpixel((x, y)) < 120 for x in (0, 71) for y in range(10))
 
+
+def _pool_snapshot() -> PluginSnapshot:
+    from stream_micro.plugins.base import QuotaAccount
+
+    return PluginSnapshot(
+        PluginHealth(True, "3 pooled account(s)"),
+        accounts=(
+            QuotaAccount(
+                "codex-a.json",
+                "CODEX ALICE",
+                "codex",
+                {"primary_percent": 60.0, "primary_label": "5H"},
+            ),
+            QuotaAccount("claude-b.json", "CLAUDE BOB", "claude", None, "HTTP 401"),
+            QuotaAccount("other.json", "OTHER", "gemini", {"primary_percent": 5.0}),
+        ),
+    )
+
+
+def test_a_pooled_account_takes_the_look_of_its_provider() -> None:
+    from stream_micro.control_renderer import quota_source
+
+    def key(**params) -> ButtonBinding:
+        return ButtonBinding(
+            key_index=10, plugin="cliproxy_quota", component="quota", action_params=params
+        )
+
+    codex = quota_source(key(account="codex-a.json"), _pool_snapshot())
+    assert codex.signals is not None and codex.signals["primary_percent"] == 60.0
+    assert (codex.title, codex.style) == ("CODEX ALICE", "codex")
+    claude = quota_source(key(account="claude-b.json"), _pool_snapshot())
+    assert (claude.problem, claude.style) == ("HTTP 401", "claude_code")
+    assert quota_source(key(account="other.json"), _pool_snapshot()).style == "cliproxy_quota"
+    assert quota_source(key(account="nobody"), _pool_snapshot()).problem == "Account not found"
+    assert quota_source(key(), _pool_snapshot()).problem == "Pick an account"
+
+
+def test_pooled_quota_key_draws_the_provider_accent_not_the_proxy_grey() -> None:
+    binding = ButtonBinding(
+        key_index=10,
+        plugin="cliproxy_quota",
+        component="quota",
+        action_params={"account": "codex-a.json"},
+    )
+    image = render_quota_key(binding, _pool_snapshot(), size=(72, 72))
+    assert image.getpixel((36, 1)) == (72, 224, 180)  # the Codex accent
