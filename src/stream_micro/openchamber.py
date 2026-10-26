@@ -10,6 +10,8 @@ from urllib.parse import quote
 
 import httpx
 
+from .windows_focus import WindowFocusError, focus_app_windows
+
 DEFAULT_DESKTOP_PORT = 57123
 
 
@@ -102,3 +104,7 @@ def select_openchamber_session(*, session_id: str, directory: str | None = None)
         raise OpenChamberError(
             "Could not open OpenChamber. Install or start OpenChamber Desktop first."
         ) from exc
+    # The deep link switches the Session inside the app but Windows may deny
+    # the app's own focus attempt (foreground lock). Force the window front.
+    with suppress(WindowFocusError):
+        focus_app_windows(("OpenChamber.exe",))

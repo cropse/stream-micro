@@ -20,6 +20,7 @@ from queue import Empty, Queue
 from typing import IO, Any
 from urllib.parse import quote
 
+from ..windows_focus import WindowFocusError, focus_app_windows
 from .base import AgentSession, PluginHealth, PluginManifest, PluginSnapshot, SessionState
 
 LOGGER = logging.getLogger(__name__)
@@ -66,6 +67,10 @@ def select_codex_thread(thread_id: str) -> None:
         raise CodexError(
             "Could not open the Codex chat. Install or start the ChatGPT desktop app first."
         ) from exc
+    # The deep link switches the chat inside the app but Windows may deny the
+    # app's own focus attempt (foreground lock). Force the window front.
+    with contextlib.suppress(WindowFocusError):
+        focus_app_windows(("ChatGPT.exe",))
 
 
 def validate_codex_config(config: dict[str, object]) -> None:
@@ -940,9 +945,7 @@ class CodexPlugin:
             if state in (SessionState.RUNNING, SessionState.WAITING):
                 self._recently_active.add(thread_id)
             elif (
-                not force_idle
-                and state is SessionState.IDLE
-                and thread_id in self._recently_active
+                not force_idle and state is SessionState.IDLE and thread_id in self._recently_active
             ):
                 state = SessionState.COMPLETED
                 self._recently_active.discard(thread_id)
