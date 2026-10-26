@@ -34,6 +34,7 @@ STALE_THRESHOLD_SECONDS = 120
 @dataclass(frozen=True)
 class OpenCodeEndpoint:
     url: str
+    api_version: int = 1
 
 
 def listening_loopback_ports(netstat_output: str) -> set[int]:
@@ -110,12 +111,30 @@ class OpenCodePlugin:
     def discover(self) -> tuple[OpenCodeEndpoint, ...]:
         found: list[OpenCodeEndpoint] = []
         for url in self._candidate_urls():
+            # Desktop already supplies an /api proxy. Direct V2 servers need
+            # the /api prefix; never turn a proxy into /api/api.
+            api_url = url if url.endswith("/api") else f"{url}/api"
+            try:
+                response = self._client.get(f"{api_url}/info")
+                body = response.json()
+                if (
+                    response.is_success
+                    and isinstance(body, dict)
+                    and isinstance(body.get("version"), str)
+                    and type(body.get("pid")) is int
+                    and isinstance(body.get("urls"), list)
+                    and isinstance(body.get("paths"), dict)
+                ):
+                    found.append(OpenCodeEndpoint(api_url, api_version=2))
+                    continue
+            except (httpx.HTTPError, ValueError):
+                pass
             try:
                 response = self._client.get(f"{url}/global/health")
                 body = response.json()
             except (httpx.HTTPError, ValueError):
                 continue
-            if response.is_success and body.get("healthy") is True:
+            if response.is_success and isinstance(body, dict) and body.get("healthy") is True:
                 found.append(OpenCodeEndpoint(url))
         self.endpoint = found[0] if found else None
         return tuple(found)
@@ -178,7 +197,12 @@ class OpenCodePlugin:
 
         pending: set[str] = set()
         for sid in session_ids:
-            for path in (f"/api/session/{sid}/question", f"/api/session/{sid}/permission"):
+            paths = (
+                (f"/session/{sid}/form", f"/session/{sid}/permission")
+                if endpoint.api_version == 2
+                else (f"/api/session/{sid}/question", f"/api/session/{sid}/permission")
+            )
+            for path in paths:
                 try:
                     response = self._client.get(f"{endpoint.url}{path}")
                     response.raise_for_status()
@@ -303,8 +327,84 @@ class OpenCodePlugin:
             active.add(sid)
         return active, waiting
 
+    def _v2_sessions(self, endpoint: OpenCodeEndpoint) -> tuple[list[Any], dict[str, Any]]:
+        """Read the global, cursor-paginated V2 feed and authoritative drains."""
+        items: list[Any] = []
+        params = {"limit": "100", "order": "desc", "parentID": "null"}
+        seen_cursors: set[str] = set()
+        while True:
+            response = self._client.get(f"{endpoint.url}/session", params=params)
+            response.raise_for_status()
+            body = response.json()
+            if not isinstance(body, dict) or not isinstance(body.get("data"), list):
+                raise OpenCodeError("OpenCode returned an unexpected session response")
+            items.extend(body["data"])
+            cursor = body.get("cursor")
+            if not isinstance(cursor, dict):
+                raise OpenCodeError("OpenCode returned an invalid session cursor")
+            next_cursor = cursor.get("next")
+            if next_cursor is None:
+                break
+            if not isinstance(next_cursor, str) or next_cursor in seen_cursors:
+                raise OpenCodeError("OpenCode returned an invalid or repeated session cursor")
+            seen_cursors.add(next_cursor)
+            params["cursor"] = next_cursor
+        response = self._client.get(f"{endpoint.url}/session/active")
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict) or not isinstance(body.get("data"), dict):
+            raise OpenCodeError("OpenCode returned an unexpected active session response")
+        statuses = {
+            sid: {"type": "busy"} for sid, state in body["data"].items()
+            if isinstance(state, dict) and state.get("type") == "running"
+        }
+        # The root-only feed omits delegated sessions. Resolve only active
+        # descendants and their ancestors, not the entire historical child feed.
+        by_id = {item["id"]: item for item in items
+                 if isinstance(item, dict) and isinstance(item.get("id"), str)}
+        delegated_pending = self._pending_session_ids_v2(endpoint, list(statuses))
+        pending_checked = set(statuses)
+        aggregated: dict[str, Any] = {}
+        for sid in statuses:
+            current = sid
+            visited: set[str] = set()
+            while current not in visited:
+                visited.add(current)
+                item = by_id.get(current)
+                if item is None:
+                    response = self._client.get(f"{endpoint.url}/session/{current}")
+                    if response.status_code == 404:
+                        break  # A drain can disappear between the two requests.
+                    response.raise_for_status()
+                    body = response.json()
+                    item = body.get("data") if isinstance(body, dict) else None
+                    if not isinstance(item, dict) or item.get("id") != current:
+                        raise OpenCodeError("OpenCode returned an unexpected session response")
+                    by_id[current] = item
+                if current not in pending_checked:
+                    delegated_pending |= self._pending_session_ids_v2(endpoint, [current])
+                    pending_checked.add(current)
+                parent = item.get("parentID")
+                if not isinstance(parent, str) or not parent:
+                    state = "waiting" if visited & delegated_pending else "busy"
+                    if aggregated.get(current, {}).get("type") != "waiting":
+                        aggregated[current] = {"type": state}
+                    break
+                current = parent
+        return items, aggregated
+
     def sessions(self) -> tuple[AgentSession, ...]:
         endpoint = self._require_endpoint()
+        if endpoint.api_version == 2:
+            try:
+                raw_sessions, statuses = self._v2_sessions(endpoint)
+            except (httpx.HTTPError, ValueError) as exc:
+                raise OpenCodeError(f"Could not read OpenCode sessions: {exc}") from exc
+        else:
+            raw_sessions, statuses = self._legacy_sessions(endpoint)
+        return self._session_states(endpoint, raw_sessions, statuses)
+
+    def _legacy_sessions(self, endpoint: OpenCodeEndpoint) -> tuple[list[Any], dict[str, Any]]:
         try:
             # `/session` is scoped by the server's current workspace on newer
             # OpenCode versions.  The experimental list is the cross-project
@@ -321,7 +421,27 @@ class OpenCodePlugin:
             raise OpenCodeError(f"Could not read OpenCode sessions: {exc}") from exc
         if not isinstance(raw_sessions, list) or not isinstance(statuses, dict):
             raise OpenCodeError("OpenCode returned an unexpected session response")
-        pending = self._pending_session_ids(endpoint)
+        return raw_sessions, statuses
+
+    def _session_states(
+        self, endpoint: OpenCodeEndpoint, raw_sessions: list[Any], statuses: dict[str, Any]
+    ) -> tuple[AgentSession, ...]:
+        visible_sessions: list[Any] = []
+        for item in raw_sessions:
+            if isinstance(item, dict):
+                time = item.get("time")
+                if isinstance(time, dict) and time.get("archived") is not None:
+                    continue
+                metadata = item.get("metadata")
+                chamber = metadata.get("openchamber") if isinstance(metadata, dict) else None
+                work = chamber.get("work") if isinstance(chamber, dict) else None
+                # OpenChamber's explicit Done marker is distinct from a turn
+                # finishing. Keep done work in OpenChamber history, not Deck slots.
+                if isinstance(work, dict) and work.get("state") == "done":
+                    continue
+            visible_sessions.append(item)
+        raw_sessions = visible_sessions
+        pending = self._pending_session_ids(endpoint) if endpoint.api_version == 1 else set()
         live_ids: set[str] = set()
         result: list[AgentSession] = []
         candidate_ids: list[str] = []
@@ -332,18 +452,26 @@ class OpenCodePlugin:
                 continue
             candidate_ids.append(item["id"])
         visible_candidate_ids = candidate_ids[:LIVE_STATE_SESSION_LIMIT]
-        if visible_candidate_ids:
-            pending |= self._pending_session_ids_v2(endpoint, visible_candidate_ids)
+        pending_candidate_ids = visible_candidate_ids
+        if endpoint.api_version == 2:
+            # A pinned/older root may still own a drain and be awaiting input.
+            pending_candidate_ids = list(dict.fromkeys([
+                *visible_candidate_ids, *(sid for sid in candidate_ids if sid in statuses)
+            ]))
+        if pending_candidate_ids:
+            pending |= self._pending_session_ids_v2(endpoint, pending_candidate_ids)
         # Always poll the last message of each session.  On OpenCode v1.18.7+
         # /session/status returns {} during tool execution — it only reports
         # "busy" during LLM token generation.  Message-based detection is the
         # authoritative signal for "agent is working".
         active_ids, waiting_ids = (
             self._active_session_ids(endpoint, visible_candidate_ids)
-            if visible_candidate_ids
+            if visible_candidate_ids and endpoint.api_version == 1
             else (set(), set())
         )
         pending |= waiting_ids
+        if endpoint.api_version == 2:
+            pending |= {sid for sid, state in statuses.items() if state.get("type") == "waiting"}
         for item in sorted(raw_sessions, key=_updated_at, reverse=True):
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):
                 continue
@@ -354,10 +482,15 @@ class OpenCodePlugin:
             status_value = statuses.get(session_id)
             if isinstance(status_value, dict):
                 status_value = status_value.get("type") or status_value.get("status")
-            directory = item.get("directory")
+            location = item.get("location")
+            directory = (
+                location.get("directory") if isinstance(location, dict) else item.get("directory")
+            )
             project = _project_folder(directory, item.get("projectID"))
             if session_id in pending:
                 state = SessionState.WAITING
+                if endpoint.api_version == 2:
+                    self._recently_busy.add(session_id)
                 self._completed.discard(session_id)
             else:
                 raw_state = self._state(status_value)
