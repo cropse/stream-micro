@@ -64,6 +64,7 @@ type OpenCodeConfig = { enabled?: boolean; endpoints?: string[]; password_env?: 
 type PluginConfig = { enabled?: boolean; [key: string]: unknown };
 type QuotaDisplay = "remaining" | "used";
 type Config = {
+  language?: "auto" | "en" | "zh-TW";
   stream_deck: { brightness: number; device_serial: string | null; quota_display?: QuotaDisplay; state_colors?: Record<string, string>; session_accent_line?: boolean; reset_thresholds?: Record<string, ResetThresholds> };
   plugins: Record<string, PluginConfig>;
   buttons: Button[];
@@ -1168,10 +1169,20 @@ function App() {
   const [dragSource, setDragSource] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
   const [lang, setLangState] = useState<Lang>(getLang());
-  const switchLang = () => {
+  const switchLang = async () => {
     const next: Lang = lang === "en" ? "zh-TW" : "en";
     setLang(next);
     setLangState(next);
+    if (!savedConfig) return;
+    try {
+      // Persist only the language on top of the SAVED config: unsaved drafts
+      // must not ride along, and an invalid draft must not block the switch.
+      const saved = await api<Config>("config", { method: "PUT", body: JSON.stringify({ ...savedConfig, language: next }) });
+      setSavedConfig(saved);
+      setConfig((prev) => (prev ? { ...prev, language: next } : prev));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : t("Could not save configuration"));
+    }
   };
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
 
@@ -1188,6 +1199,14 @@ function App() {
       if (replaceLocalConfig || !dirtyRef.current) {
         setConfig(nextConfig);
         setSavedConfig(nextConfig);
+      }
+      // The saved configuration is the source of truth for the language once
+      // it names one explicitly; "auto" keeps the browser-detected choice.
+      if (nextConfig.language === "en" || nextConfig.language === "zh-TW") {
+        if (getLang() !== nextConfig.language) {
+          setLang(nextConfig.language);
+          setLangState(nextConfig.language);
+        }
       }
       setSnapshots(nextSnapshots);
       setManifests(nextManifests);
@@ -1724,7 +1743,7 @@ function App() {
       <div className="brand"><span className="brand-mark">DB</span><div><p>{t("LOCAL CONTROL SURFACE")}</p><h1>Deck Bridge</h1></div></div>
       <div className="topbar-right">
         <span className={`connection ${status?.device.connected ? "online" : "offline"}`}><i /> {status?.device.connected ? t("MK.2 connected") : t("Deck offline")}</span>
-        <button type="button" className="lang-switch" title={t("Switch language")} aria-label={t("Switch language")} onClick={switchLang}>{lang === "en" ? "中文" : "EN"}</button>
+        <button type="button" className="lang-switch" title={t("Switch language")} aria-label={t("Switch language")} onClick={() => void switchLang()}>{lang === "en" ? "中文" : "EN"}</button>
         <button onClick={() => void refresh(true)}>{t("Refresh")}</button>
         <button className="primary" disabled={!dirty} onClick={() => void save()}>{dirty ? t("Save changes") : t("Saved")}</button>
       </div>
