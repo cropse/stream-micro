@@ -764,3 +764,15 @@ def test_dashboard_learns_which_key_is_used_but_never_the_key(tmp_path: Path, mo
         assert client.put("/api/config", json=data).status_code == 200
         section = client.get("/api/config").json()["plugins"]["cliproxy_quota"]
         assert section["management_key_source"] == "missing"
+
+
+def test_dashboard_serves_bundled_dist_from_resolver(tmp_path: Path, monkeypatch) -> None:
+    dist = tmp_path / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<html>deck</html>", encoding="utf-8")
+    monkeypatch.setattr("stream_micro.paths.frontend_dist_dir", lambda: dist)
+    config_path = tmp_path / "control.yaml"
+    write_control_config(config_path, default_control_config())
+    with TestClient(create_app(config_path)) as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/").text == "<html>deck</html>"
