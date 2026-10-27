@@ -112,3 +112,21 @@ def test_queued_exit_takes_priority_over_restarts():
     controller.commands.put("exit")
     controller.run(lambda: None)
     assert runtime.stops == 1
+
+
+def test_startup_registration_factory_points_source_at_pythonw(tmp_path):
+    from stream_micro.tray import make_startup_registration
+
+    exe = tmp_path / "Scripts" / "python.exe"
+    registration = make_startup_registration(tmp_path / "bridge.yaml", exe)
+    assert not registration.frozen
+    assert registration.pythonw == (tmp_path / "Scripts" / "pythonw.exe")
+
+
+def test_startup_registration_factory_points_frozen_at_the_exe(tmp_path, monkeypatch):
+    from stream_micro.tray import make_startup_registration
+
+    monkeypatch.setattr("stream_micro.paths.is_frozen", lambda: True)
+    exe = tmp_path / "StreamMicro.exe"
+    registration = make_startup_registration(tmp_path / "bridge.yaml", exe)
+    assert registration.frozen

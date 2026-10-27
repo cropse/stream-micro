@@ -34,3 +34,33 @@ def test_startup_missing_interpreter_writes_nothing(tmp_path: Path):
     with pytest.raises(FileNotFoundError):
         registration.set_enabled(True)
     assert not registration.path.exists()
+
+
+def test_frozen_registration_runs_only_the_executable(tmp_path: Path):
+    from stream_micro.windows_startup import StartupRegistration
+
+    exe = tmp_path / "工具 空 白" / "StreamMicro.exe"
+    registration = StartupRegistration(
+        tmp_path / "bridge.yaml", tmp_path / "missing-pythonw.exe", tmp_path,
+        frozen=True, executable=exe,
+    )
+    registration.set_enabled(True)  # pythonw 不存在也不該被擋
+    assert registration.is_enabled()
+    content = registration.path.read_text(encoding="utf-16")
+    assert "StreamMicro.exe" in content
+    assert "pythonw" not in content and "-m" not in content
+    registration.set_enabled(False)
+    assert not registration.path.exists()
+
+
+def test_frozen_registration_refuses_foreign_entry(tmp_path: Path):
+    from stream_micro.windows_startup import StartupRegistration
+
+    registration = StartupRegistration(
+        tmp_path / "bridge.yaml", tmp_path / "pythonw.exe", tmp_path,
+        frozen=True, executable=tmp_path / "StreamMicro.exe",
+    )
+    registration.path.write_text("foreign", encoding="utf-16")
+    with pytest.raises(RuntimeError):
+        registration.set_enabled(True)
+    assert registration.path.read_text(encoding="utf-16") == "foreign"
