@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from .control_config import ControlConfigError, load_control_config
+from .control_config import load_control_config
 
 # Windows LANGIDs treated as Traditional Chinese (zh-TW, zh-HK, zh-MO).
 _ZH_HANT_LANGIDS = frozenset({0x0404, 0x0C04, 0x1404})
@@ -71,9 +71,14 @@ def resolve_language(language: str, *, ui_language: int | None = None) -> str:
 
 
 def language_from_config(config_path: Path) -> str:
-    """Read the configured language; any failure falls back to "auto"."""
+    """Read the configured language; any failure falls back to "auto".
+
+    Best-effort by contract: the tray polls this every cycle, so a broken
+    configuration must degrade to "auto", never take the worker down —
+    including parser errors outside the ControlConfigError hierarchy.
+    """
 
     try:
         return load_control_config(config_path).language
-    except (ControlConfigError, OSError, ValueError):
+    except Exception:
         return "auto"

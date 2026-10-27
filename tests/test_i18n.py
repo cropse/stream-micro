@@ -38,3 +38,15 @@ def test_language_from_config_reads_and_falls_back(tmp_path: Path) -> None:
     bad = tmp_path / "bad.yaml"
     bad.write_text("{not: valid: yaml", encoding="utf-8")
     assert language_from_config(bad) == "auto"
+
+
+def test_language_from_config_tolerates_structurally_invalid_yaml(tmp_path: Path) -> None:
+    """Best-effort reader: any failure must fall back to "auto", never raise.
+
+    Mixed-type top-level keys make parse_control_config's sorted() raise
+    TypeError; the tray's 2-second poll must survive that.
+    """
+
+    bad = tmp_path / "structurally-bad.yaml"
+    bad.write_text("1: broken\nunexpected: true\n", encoding="utf-8")
+    assert language_from_config(bad) == "auto"
