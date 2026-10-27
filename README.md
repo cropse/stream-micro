@@ -2,6 +2,8 @@
 
 **Your AI sessions and usage, at a glance on your Stream Deck.**
 
+English | [繁體中文](README.zh-TW.md)
+
 Stream Micro turns an **Elgato Stream Deck MK.2** into a local control surface
 for your AI tools. See which sessions are working or waiting for you, jump back
 into a session with a key press, and keep an eye on your remaining quota.
