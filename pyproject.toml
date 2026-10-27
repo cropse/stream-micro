@@ -18,6 +18,7 @@ dependencies = [
 stream-micro = "stream_micro.cli:main"
 
 [dependency-groups]
+packaging = ["pyinstaller>=6,<7"]
 dev = [
   "pyright>=1.1,<2",
   "pytest>=8,<9",
@@ -32,6 +33,7 @@ build-backend = "hatchling.build"
 packages = ["src/stream_micro"]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q"
 
