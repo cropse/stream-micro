@@ -16,13 +16,13 @@ def _is_frozen(frozen: bool | None) -> bool:
 def app_root(*, frozen: bool | None = None, executable: Path | None = None) -> Path:
     if _is_frozen(frozen):
         return (executable or Path(sys.executable)).resolve().parent
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[2]
 
 
 def bundled_root(*, frozen: bool | None = None, meipass: Path | None = None) -> Path:
     if _is_frozen(frozen):
         return meipass or Path(getattr(sys, "_MEIPASS", sys.executable))
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[2]
 
 
 def frontend_dist_dir(*, frozen: bool | None = None, meipass: Path | None = None) -> Path:

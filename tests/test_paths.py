@@ -4,7 +4,7 @@ from stream_micro import paths
 
 
 def test_source_roots_point_at_repo_layout() -> None:
-    repo = Path(__file__).resolve().parents[2]
+    repo = Path(__file__).resolve().parents[1]
     assert paths.app_root(frozen=False) == repo
     assert paths.frontend_dist_dir(frozen=False) == repo / "frontend" / "dist"
     assert paths.integration_dir(frozen=False) == repo / "integrations" / "claude-code-stream-micro"
