@@ -54,3 +54,66 @@ def test_serve_reload_uses_factory_and_watches_python_sources(tmp_path: Path, mo
             },
         )
     ]
+
+
+def test_frozen_serve_defaults_bridge_config_next_to_exe(tmp_path, monkeypatch) -> None:
+    from stream_micro import cli
+
+    seen: list[Path] = []
+
+    class Runtime:
+        def __init__(self, config_path):
+            seen.append(Path(config_path))
+
+        def start(self):
+            pass
+
+        is_running = False
+        error = None
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr("stream_micro.paths.is_frozen", lambda: True)
+    monkeypatch.setattr("stream_micro.paths.app_root", lambda: tmp_path)
+    monkeypatch.setattr("stream_micro.runtime.BridgeRuntime", Runtime)
+    assert cli.main(["serve"]) == 0
+    assert seen == [tmp_path / "bridge.yaml"]
+
+
+def test_explicit_bridge_config_survives_frozen(tmp_path, monkeypatch) -> None:
+    from stream_micro import cli
+
+    seen: list[Path] = []
+
+    class Runtime:
+        def __init__(self, config_path):
+            seen.append(Path(config_path))
+
+        def start(self):
+            pass
+
+        is_running = False
+        error = None
+
+        def stop(self):
+            pass
+
+    explicit = tmp_path / "custom.yaml"
+    monkeypatch.setattr("stream_micro.paths.is_frozen", lambda: True)
+    monkeypatch.setattr("stream_micro.runtime.BridgeRuntime", Runtime)
+    assert cli.main(["serve", "--bridge-config", str(explicit)]) == 0
+    assert seen == [explicit]
+
+
+def test_frozen_without_command_enters_tray(monkeypatch, tmp_path) -> None:
+    from stream_micro import cli
+
+    called: list[Path] = []
+    monkeypatch.setattr("stream_micro.paths.is_frozen", lambda: True)
+    monkeypatch.setattr("stream_micro.paths.app_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        "stream_micro.tray.main", lambda config_path: called.append(Path(config_path)) or 0
+    )
+    assert cli.main([]) == 0
+    assert called == [tmp_path / "bridge.yaml"]
