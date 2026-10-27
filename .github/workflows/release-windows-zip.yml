@@ -1,0 +1,47 @@
+name: Release Windows zip
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --dev --group packaging
+      - name: Check release tag matches package version
+        shell: bash
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          tag="${tag#v}"
+          version=$(uv run python -c "from importlib.metadata import version; print(version('stream-micro'))")
+          if [ "$tag" != "$version" ]; then
+            echo "Release tag '$tag' does not match package version '$version'. Bump pyproject.toml or re-tag." >&2
+            exit 1
+          fi
+      - name: Build frontend (dashboard tests need the built dist)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Test
+        run: uv run pytest
+      - name: Lint
+        run: uv run ruff check src tests build_exe.py
+      - name: Build portable zip
+        run: uv run --group packaging python build_exe.py
+      - name: Attach zip to the release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: build/stream-micro-*-win64.zip
