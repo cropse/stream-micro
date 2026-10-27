@@ -50,6 +50,12 @@ startup fails safely: **no process is killed or adopted**. Close that instance
 yourself before restarting Bridge from the tray. There is no automatic crash
 restart in this version, and this application never starts/stops OpenCode.
 
+Tray logs are written beside `bridge.yaml` to `bridge.log`, rotated at 5 MiB
+with one backup, `bridge.log.1`. Configuration or dependency failures before
+tray creation are shown in a Windows error dialog. `serve` and `serve --reload`
+remain available for development without a tray icon. Close the application
+before running `uv sync` if Windows reports that `stream-micro.exe` is in use.
+
 ## Portable Windows executable
 
 Download and extract the Windows zip to any folder, then double-click
@@ -66,12 +72,6 @@ uv run --group packaging python build_exe.py
 ```
 
 The source development workflow using `serve` and `start.vbs` is unchanged.
-
-Tray logs are written beside `bridge.yaml` to `bridge.log`, rotated at 5 MiB
-with one backup, `bridge.log.1`. Configuration or dependency failures before
-tray creation are shown in a Windows error dialog. `serve` and `serve --reload`
-remain available for development without a tray icon. Close the application
-before running `uv sync` if Windows reports that `stream-micro.exe` is in use.
 
 ## Development hot reload
 
