@@ -764,3 +764,13 @@ def test_dashboard_learns_which_key_is_used_but_never_the_key(tmp_path: Path, mo
         assert client.put("/api/config", json=data).status_code == 200
         section = client.get("/api/config").json()["plugins"]["cliproxy_quota"]
         assert section["management_key_source"] == "missing"
+
+
+def test_config_round_trip_preserves_language(tmp_path: Path) -> None:
+    config_path = tmp_path / "control.yaml"
+    write_control_config(config_path, default_control_config())
+    with TestClient(create_app(config_path)) as client:
+        data = client.get("/api/config").json()
+        data["language"] = "zh-TW"
+        assert client.put("/api/config", json=data).status_code == 200
+        assert client.get("/api/config").json()["language"] == "zh-TW"

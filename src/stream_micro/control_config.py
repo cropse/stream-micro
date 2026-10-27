@@ -95,6 +95,10 @@ class ControlConfig:
     plugins: dict[str, dict[str, Any]]
     buttons: tuple[ButtonBinding, ...]
     session_window_bindings: dict[str, dict[str, str]] = field(default_factory=dict)
+    # UI language for backend surfaces (tray, CLI): "auto" follows the OS,
+    # "en" and "zh-TW" pin it. The Dashboard's browser language is its own
+    # pre-config seed and follows this setting once the configuration loads.
+    language: str = "auto"
 
 
 def default_control_config() -> ControlConfig:
@@ -224,6 +228,8 @@ def _migrate_legacy_session_row(buttons: tuple[ButtonBinding, ...]) -> tuple[But
 def validate_control_config(config: ControlConfig) -> None:
     if config.schema_version != SCHEMA_VERSION:
         raise ControlConfigError(f"schema_version must be {SCHEMA_VERSION}")
+    if config.language not in ("auto", "en", "zh-TW"):
+        raise ControlConfigError("language must be one of: auto, en, zh-TW")
     if config.bridge.host != "127.0.0.1":
         raise ControlConfigError("bridge.host must be 127.0.0.1")
     if not isinstance(config.bridge.port, int) or not 1 <= config.bridge.port <= 65535:
@@ -388,6 +394,7 @@ def parse_control_config(data: dict[str, Any]) -> ControlConfig:
         "plugins",
         "buttons",
         "session_window_bindings",
+        "language",
     }
     unknown = sorted(set(data) - allowed)
     if unknown:
@@ -405,6 +412,7 @@ def parse_control_config(data: dict[str, Any]) -> ControlConfig:
         session_window_bindings=_mapping(
             data.get("session_window_bindings", {}), "session_window_bindings"
         ),
+        language=data.get("language", "auto"),
     )
     validate_control_config(config)
     return config

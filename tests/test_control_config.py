@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -138,3 +139,26 @@ def test_default_config_has_a_disabled_cliproxy_quota_service() -> None:
     assert section["management_key"] is None
     assert section["allow_insecure_http"] is False
     assert section["providers"] == ["codex", "claude"]
+
+
+def test_language_accepts_valid_values() -> None:
+    base = control_config_data(default_control_config())
+    for value in ("auto", "en", "zh-TW"):
+        assert parse_control_config({**base, "language": value}).language == value
+
+
+def test_language_defaults_to_auto_when_missing() -> None:
+    base = control_config_data(default_control_config())
+    base.pop("language")
+    assert parse_control_config(base).language == "auto"
+
+
+def test_language_rejects_invalid_value() -> None:
+    base = control_config_data(default_control_config())
+    with pytest.raises(ControlConfigError, match="language must be one of: auto, en, zh-TW"):
+        parse_control_config({**base, "language": "fr"})
+
+
+def test_language_round_trips_through_serialization() -> None:
+    config = replace(default_control_config(), language="zh-TW")
+    assert parse_control_config(control_config_data(config)).language == "zh-TW"
