@@ -29,7 +29,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "integrations" / "claude-code-stream-micro"
+from . import paths
+
+INTEGRATION_DIR = paths.integration_dir()
 HOOK_SCRIPT = "report-status.mjs"
 QUOTA_SCRIPT = "report-quota.mjs"
 # The events the bundled plugin listens to (hooks/hooks.json).
@@ -160,7 +162,11 @@ def inspect(path: Path, port: int) -> dict[str, Any]:
                 if isinstance(command, str) and _is_ours(command, HOOK_SCRIPT):
                     found.add(event)
                     # An earlier (environment-variable) install is upgraded on install.
-                    stale = not _points_here(command, port, HOOK_PATH) or URL_ARG not in command
+                    stale = (
+                        not _points_here(command, port, HOOK_PATH)
+                        or URL_ARG not in command
+                        or _script(HOOK_SCRIPT) not in command
+                    )
                     wrong_port |= stale
     if not found:
         hook_state = "missing"
@@ -172,7 +178,11 @@ def inspect(path: Path, port: int) -> dict[str, Any]:
         hook_state = "ours"
     command = _status_command(data)
     if command and _is_ours(command, QUOTA_SCRIPT):
-        fresh = _points_here(command, port, QUOTA_PATH) and URL_ARG in command
+        fresh = (
+            _points_here(command, port, QUOTA_PATH)
+            and URL_ARG in command
+            and _script(QUOTA_SCRIPT) in command
+        )
         line = "ours" if fresh else "wrong_port"
     else:
         line = "other" if command else "missing"
