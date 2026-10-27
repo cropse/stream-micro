@@ -3,12 +3,12 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
-from pathlib import Path
 from types import TracebackType
 from typing import Any
 
 from PIL import Image
 
+from . import paths
 from .config import StreamDeckConfig
 from .control_config import MK2_KEY_COUNT, Mk2Settings
 
@@ -21,7 +21,7 @@ class DeviceError(RuntimeError):
 
 def _prepare_hidapi_search_path() -> None:
     global _HIDAPI_DIRECTORY
-    bundled_hidapi = Path(__file__).resolve().parents[2] / "hidapi.dll"
+    bundled_hidapi = paths.app_root() / "hidapi.dll"
     if bundled_hidapi.is_file() and _HIDAPI_DIRECTORY is None and hasattr(os, "add_dll_directory"):
         _HIDAPI_DIRECTORY = os.add_dll_directory(str(bundled_hidapi.parent))
 
