@@ -54,3 +54,32 @@ def test_serve_reload_uses_factory_and_watches_python_sources(tmp_path: Path, mo
             },
         )
     ]
+
+
+class _ImmediateRuntime:
+    is_running = False
+
+    def __init__(self, path):
+        self.path = path
+
+    def start(self):
+        pass
+
+    def stop(self):
+        return True
+
+
+def test_created_config_message_follows_language(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr("stream_micro.runtime.BridgeRuntime", _ImmediateRuntime)
+    monkeypatch.setattr(cli, "resolve_language", lambda language, **_kw: "zh-TW")
+
+    assert cli.main(["serve", "--bridge-config", str(tmp_path / "bridge.yaml")]) == 0
+    assert "stream-micro: 已建立 Bridge 設定檔：" in capsys.readouterr().out
+
+
+def test_created_config_message_stays_english_by_default(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr("stream_micro.runtime.BridgeRuntime", _ImmediateRuntime)
+    monkeypatch.setattr(cli, "resolve_language", lambda language, **_kw: "en")
+
+    assert cli.main(["serve", "--bridge-config", str(tmp_path / "bridge.yaml")]) == 0
+    assert "stream-micro: created Bridge configuration at" in capsys.readouterr().out

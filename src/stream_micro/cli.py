@@ -19,6 +19,7 @@ from .control_config import (
 )
 from .deck_bridge import Mk2BridgeRunner
 from .device import DeviceError
+from .i18n import language_from_config, resolve_language, t
 from .models import QuotaWindow, WindowKind
 from .renderer import render_quota_key
 
@@ -83,6 +84,7 @@ def create_reload_app():
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        lang = resolve_language(language_from_config(args.bridge_config))
         if args.command == "tray":
             from .tray import main as tray_main
 
@@ -95,15 +97,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
                     ctypes.windll.user32.MessageBoxW(
                         None,
-                        "Stream Micro could not start. Check bridge.log and run "
-                        "uv sync --dev in the project folder, then try again.",
+                        t(
+                            "Stream Micro could not start. Check bridge.log and run "
+                            "uv sync --dev in the project folder, then try again.",
+                            lang,
+                        ),
                         "Stream Micro", 16,
                     )
                 return 2
         if args.command == "serve":
             if not args.bridge_config.exists():
                 write_control_config(args.bridge_config, default_control_config())
-                print(f"stream-micro: created Bridge configuration at {args.bridge_config}")
+                created = t("created Bridge configuration at {path}", lang)
+                print(f"stream-micro: {created.format(path=args.bridge_config)}")
             logging.basicConfig(
                 level=os.environ.get("STREAM_MICRO_LOG", "INFO").upper(),
                 format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -152,7 +158,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"stream-micro: {exc}")
         return 2
     except KeyboardInterrupt:
-        print("stream-micro: stopped")
+        stop_lang = resolve_language(language_from_config(args.bridge_config))
+        print(f"stream-micro: {t('stopped', stop_lang)}")
         return 0
 
 
