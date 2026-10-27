@@ -10,11 +10,20 @@ def test_serve_creates_separate_bridge_configuration(tmp_path: Path, monkeypatch
     config_path = tmp_path / "bridge.yaml"
     calls: list[tuple[object, str, int]] = []
 
-    def fake_run(application: object, *, host: str, port: int, **_kwargs: object) -> None:
-        calls.append((application, host, port))
+    class Runtime:
+        is_running = False
 
-    monkeypatch.setattr("uvicorn.run", fake_run)
-    monkeypatch.setattr(cli.Thread, "start", lambda _thread: None)
+        def __init__(self, path):
+            self.path = path
+
+        def start(self):
+            config = load_control_config(self.path).bridge
+            calls.append((self, config.host, config.port))
+
+        def stop(self):
+            return True
+
+    monkeypatch.setattr("stream_micro.runtime.BridgeRuntime", Runtime)
 
     assert cli.main(["serve", "--bridge-config", str(config_path)]) == 0
     assert config_path.exists()

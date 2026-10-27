@@ -19,6 +19,43 @@ Open `http://127.0.0.1:8765`. The first run writes `bridge.yaml`; it is the
 Dashboard's versioned source of truth and does not replace the legacy Ollama
 `config.yaml`.
 
+## Windows system tray
+
+After the setup/build commands above, double-click **`start.vbs`** for a
+windowless launch. `start.bat` is only a compatibility shortcut to the same
+windowless tray launcher; it no longer starts a separate console Bridge.
+Neither launcher installs packages or builds the frontend.
+For an explicit troubleshooting console launch:
+
+```powershell
+.venv\Scripts\python.exe -m stream_micro.cli tray --bridge-config bridge.yaml
+```
+
+The MK.2-shaped tray icon is green when this Bridge's HTTP server responds,
+yellow while starting/stopping, and red when stopped or unavailable. Hover for
+status; single-click opens Dashboard using the configured host/port. External
+provider outages do not by themselves turn the icon red. Windows may put the
+icon under **^**; use Windows taskbar settings to keep it visible.
+
+Right-click for **開啟 Dashboard**, **重新啟動 Bridge**, **停止 Bridge**,
+**登入自動啟動**, and **結束**. Stop keeps the tray icon so you can restart;
+Exit stops the Bridge and releases the Deck before removing the icon.
+Login startup is **off by default**; checking the menu installs only this
+configuration's launcher in your current user's Startup folder (no admin).
+Uncheck it before moving the checkout or virtual environment.
+
+Repeated tray launches for the same configuration only open Dashboard.
+If another process (including a manually launched `serve`) occupies the port,
+startup fails safely: **no process is killed or adopted**. Close that instance
+yourself before restarting Bridge from the tray. There is no automatic crash
+restart in this version, and this application never starts/stops OpenCode.
+
+Tray logs are written beside `bridge.yaml` to `bridge.log`, rotated at 5 MiB
+with one backup, `bridge.log.1`. Configuration or dependency failures before
+tray creation are shown in a Windows error dialog. `serve` and `serve --reload`
+remain available for development without a tray icon. Close the application
+before running `uv sync` if Windows reports that `stream-micro.exe` is in use.
+
 ## Development hot reload
 
 Run the Bridge with Python reload enabled:

@@ -25,6 +25,7 @@ class Mk2BridgeRunner:
         self.sessions: tuple[AgentSession, ...] = ()
         self.sessions_by_plugin: dict[str, tuple[AgentSession, ...]] = {}
         self._refresh_requested = Event()
+        self._stop_requested = Event()
         self._pressed_at: dict[int, float] = {}
         self._clock = clock
         self._logger = logging.getLogger(__name__)
@@ -88,9 +89,13 @@ class Mk2BridgeRunner:
     def press(self, key_index: int) -> None:
         self.service.press_key(key_index)
 
+    def stop(self) -> None:
+        self._stop_requested.set()
+        self._refresh_requested.set()
+
     def run(self, *, once: bool = False, sleep: Callable[[float], None] = time.sleep) -> None:
         logger = logging.getLogger(__name__)
-        while True:
+        while not self._stop_requested.is_set():
             try:
                 with Mk2DeckOutput(self.service.config.stream_deck) as output:
                     self.service.device_status = {
@@ -99,7 +104,7 @@ class Mk2BridgeRunner:
                         "key_count": 15,
                     }
                     output.set_key_callback(lambda _deck, key, pressed: self._on_key(key, pressed))
-                    while True:
+                    while not self._stop_requested.is_set():
                         self.refresh(output)
                         if once:
                             return
@@ -112,7 +117,11 @@ class Mk2BridgeRunner:
                 if once:
                     raise
                 logger.error("Stream Deck unavailable: %s", exc)
-                sleep(self.service.config.bridge.refresh_interval_seconds)
+                interval = self.service.config.bridge.refresh_interval_seconds
+                if sleep is time.sleep:
+                    self._stop_requested.wait(interval)
+                else:
+                    sleep(interval)
 
     def _on_key(self, key_index: int, pressed: bool) -> None:
         if pressed:

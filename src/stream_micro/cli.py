@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=Path("output"), help="Demo PNG directory")
     parser.add_argument(
         "command",
-        choices=("serve",),
+        choices=("serve", "tray"),
         nargs="?",
         help="Run the local Agent Control Surface API and Dashboard",
     )
@@ -83,6 +83,23 @@ def create_reload_app():
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "tray":
+            from .tray import main as tray_main
+
+            try:
+                return tray_main(args.bridge_config)
+            except Exception:
+                logging.getLogger(__name__).exception("Tray startup failed")
+                if os.name == "nt":
+                    import ctypes
+
+                    ctypes.windll.user32.MessageBoxW(
+                        None,
+                        "Stream Micro could not start. Check bridge.log and run "
+                        "uv sync --dev in the project folder, then try again.",
+                        "Stream Micro", 16,
+                    )
+                return 2
         if args.command == "serve":
             if not args.bridge_config.exists():
                 write_control_config(args.bridge_config, default_control_config())
@@ -105,16 +122,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     port=bridge_config.bridge.port,
                 )
                 return 0
-            from .server import create_app
+            import time
 
-            service = BridgeService(args.bridge_config)
-            runner = Mk2BridgeRunner(service)
-            Thread(target=runner.run, name="stream-micro-mk2", daemon=True).start()
-            run_server(
-                create_app(args.bridge_config, service=service),
-                host=bridge_config.bridge.host,
-                port=bridge_config.bridge.port,
-            )
+            from .runtime import BridgeRuntime
+
+            runtime = BridgeRuntime(args.bridge_config)
+            try:
+                runtime.start()
+                while runtime.is_running:
+                    time.sleep(0.2)
+                if getattr(runtime, "error", None):
+                    logging.error("%s", runtime.error)
+                    return 2
+            finally:
+                runtime.stop()
             return 0
         if args.demo:
             paths = write_demo(args.config, args.output)
@@ -127,7 +148,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         run(config, once=args.once)
         return 0
-    except (ConfigError, ControlConfigError, DeviceError) as exc:
+    except (ConfigError, ControlConfigError, DeviceError, OSError, RuntimeError) as exc:
         print(f"stream-micro: {exc}")
         return 2
     except KeyboardInterrupt:

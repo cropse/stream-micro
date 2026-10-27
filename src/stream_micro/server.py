@@ -45,7 +45,10 @@ def own_page_only(request: Request) -> None:
         )
 
 
-def create_app(config_path: Path | str, *, service: BridgeService | None = None) -> FastAPI:
+def create_app(
+    config_path: Path | str, *, service: BridgeService | None = None,
+    close_service: bool = True,
+) -> FastAPI:
     service = service or BridgeService(config_path)
 
     @asynccontextmanager
@@ -53,7 +56,8 @@ def create_app(config_path: Path | str, *, service: BridgeService | None = None)
         try:
             yield
         finally:
-            service.close()
+            if close_service:
+                service.close()
 
     app = FastAPI(title="Deck Bridge", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.bridge = service
