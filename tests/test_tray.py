@@ -112,3 +112,43 @@ def test_queued_exit_takes_priority_over_restarts():
     controller.commands.put("exit")
     controller.run(lambda: None)
     assert runtime.stops == 1
+
+
+def test_status_strings_follow_language():
+    runtime = Runtime()
+    views = []
+    controller = tray.TrayController(runtime, lambda *s: views.append(s), lambda _: None,
+                                     probe=lambda _url: False, language="zh-TW")
+    controller.handle("stop")
+    assert views[-1] == ("red", "Bridge 已停止")
+    controller.set_language("en")
+    controller.check_health()
+    assert views[-1] == ("red", "Bridge stopped or not responding")
+
+
+def test_language_change_represents_unchanged_status():
+    runtime = Runtime()
+    views = []
+    controller = tray.TrayController(runtime, lambda *s: views.append(s), lambda _: None,
+                                     probe=lambda _url: True, language="en")
+    controller.handle("restart")  # ends green "Bridge running"
+    seen = len(views)
+    controller.set_language("zh-TW")
+    controller.check_health()  # state unchanged, language changed: must re-present
+    assert views[seen] == ("green", "Bridge 執行中")
+
+
+def test_run_loop_follows_language_provider():
+    runtime = Runtime()
+    languages = []
+    current = {"lang": "en"}
+    controller = tray.TrayController(runtime, lambda *_: None, lambda _: None,
+                                     probe=lambda _url: True,
+                                     language="en",
+                                     language_provider=lambda: current["lang"],
+                                     on_language=languages.append)
+    controller.commands.put("exit")
+    current["lang"] = "zh-TW"
+    controller.run(lambda: None)
+    assert controller.language == "zh-TW"
+    assert languages == ["zh-TW"]

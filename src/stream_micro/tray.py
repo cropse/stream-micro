@@ -15,6 +15,7 @@ import httpx
 from PIL import Image, ImageDraw
 
 from .control_config import default_control_config, write_control_config
+from .i18n import language_from_config, resolve_language, t
 from .runtime import BridgeRuntime
 
 
@@ -29,7 +30,10 @@ def probe_bridge(url: str) -> bool:
 class TrayController:
     def __init__(self, runtime: Any, present: Callable[[str, str], None],
                  open_url: Callable[[str], object], *,
-                 probe: Callable[[str], bool] = probe_bridge) -> None:
+                 probe: Callable[[str], bool] = probe_bridge,
+                 language: str = "en",
+                 language_provider: Callable[[], str] | None = None,
+                 on_language: Callable[[str], None] | None = None) -> None:
         self.runtime = runtime
         self._present = present
         self._last_status: tuple[str, str] | None = None
@@ -38,6 +42,20 @@ class TrayController:
         self.exited = False
         self.commands: Queue[str] = Queue()
         self.startup: Any = None
+        # Resolved UI language ("en" or "zh-TW"); a provider lets the run loop
+        # follow configuration changes without a restart.
+        self.language = language
+        self.language_provider = language_provider
+        self.on_language = on_language
+
+    def set_language(self, language: str) -> None:
+        """Switch the tray's language; the next status presents in the new one."""
+
+        if language != self.language:
+            self.language = language
+            self._last_status = None
+            if self.on_language is not None:
+                self.on_language(language)
 
     def present(self, color: str, text: str) -> None:
         if self._last_status != (color, text):
@@ -51,19 +69,19 @@ class TrayController:
             elif command == "startup":
                 self.startup.set_enabled(not self.startup.is_enabled())
             elif command in ("restart", "stop", "exit"):
-                self.present("yellow", "Stopping Bridge")
+                self.present("yellow", t("Stopping Bridge", self.language))
                 if not self.runtime.stop():
                     raise RuntimeError("Shutdown timed out; restart blocked")
                 if command == "restart":
-                    self.present("yellow", "Starting Bridge")
+                    self.present("yellow", t("Starting Bridge", self.language))
                     self.runtime.start()
                     self.check_health()
                 else:
-                    self.present("red", "Bridge stopped")
+                    self.present("red", t("Bridge stopped", self.language))
                     self.exited = command == "exit"
         except Exception:
             logging.getLogger(__name__).exception("Tray command failed: %s", command)
-            self.present("red", "Operation failed; see bridge.log")
+            self.present("red", t("Operation failed; see bridge.log", self.language))
 
     def check_health(self) -> None:
         try:
@@ -72,12 +90,15 @@ class TrayController:
             logging.getLogger(__name__).exception("Bridge health check failed")
             ok = False
         self.present("green" if ok else "red",
-                     "Bridge running" if ok else "Bridge stopped or not responding")
+                     t("Bridge running" if ok else "Bridge stopped or not responding",
+                       self.language))
 
     def run(self, on_exit: Callable[[], None]) -> None:
         if self.commands.empty():
             self.handle("restart")
         while not self.exited:
+            if self.language_provider is not None:
+                self.set_language(self.language_provider())
             try:
                 pending = [self.commands.get(timeout=2)]
                 while True:
@@ -130,13 +151,21 @@ def main(config_path: Path) -> int:
         try:
             import pystray
 
-            icon = pystray.Icon("stream-micro", status_icon("yellow"), "Stream Micro: Starting")
+            lang = resolve_language(language_from_config(config_path))
+            icon = pystray.Icon("stream-micro", status_icon("yellow"),
+                                "Stream Micro: " + t("Starting", lang))
 
             def present(color: str, text: str) -> None:
                 icon.icon = status_icon(color)
                 icon.title = "Stream Micro: " + text
 
-            controller = TrayController(runtime, present, webbrowser.open)
+            controller = TrayController(
+                runtime, present, webbrowser.open, language=lang,
+                language_provider=lambda: resolve_language(
+                    language_from_config(config_path)
+                ),
+                on_language=lambda _lang: icon.update_menu(),
+            )
             controller.startup = StartupRegistration(
                 config_path, Path(sys.executable).with_name("pythonw.exe"))
 
@@ -150,13 +179,17 @@ def main(config_path: Path) -> int:
                 return callback
 
             icon.menu = pystray.Menu(
-                pystray.MenuItem("開啟 Dashboard", enqueue("open"), default=True),
-                pystray.MenuItem("重新啟動 Bridge", enqueue("restart")),
-                pystray.MenuItem("停止 Bridge", enqueue("stop")),
+                pystray.MenuItem(lambda _item: t("Open Dashboard", controller.language),
+                                enqueue("open"), default=True),
+                pystray.MenuItem(lambda _item: t("Restart Bridge", controller.language),
+                                enqueue("restart")),
+                pystray.MenuItem(lambda _item: t("Stop Bridge", controller.language),
+                                enqueue("stop")),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("登入自動啟動", enqueue("startup"),
-                                 checked=lambda _item: controller.startup.is_enabled()),
-                pystray.MenuItem("結束", enqueue("exit")),
+                pystray.MenuItem(lambda _item: t("Run at log in", controller.language),
+                                enqueue("startup"),
+                                checked=lambda _item: controller.startup.is_enabled()),
+                pystray.MenuItem(lambda _item: t("Exit", controller.language), enqueue("exit")),
             )
 
             def tracked_setup(native_icon: Any) -> None:
