@@ -1,48 +1,48 @@
-# 語言設定進 config 與 i18n 實作計畫
+﻿# èªžè¨€è¨­å®šé€² config èˆ‡ i18n å¯¦ä½œè¨ˆç•«
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 語言選擇存進 `bridge.yaml`，系統匣選單與狀態提示、CLI 訊息跟隨語言出字，README 提供中英雙語。
+**Goal:** èªžè¨€é¸æ“‡å­˜é€² `bridge.yaml`ï¼Œç³»çµ±åŒ£é¸å–®èˆ‡ç‹€æ…‹æç¤ºã€CLI è¨Šæ¯è·Ÿéš¨èªžè¨€å‡ºå­—ï¼ŒREADME æä¾›ä¸­è‹±é›™èªžã€‚
 
-**Architecture:** config 頂層新增 `language`（`"auto" | "en" | "zh-TW"`，預設 `"auto"`）。後端新增 i18n 模組（英文原文為鍵 + zh-TW 字典），系統匣每 2 秒重讀 config 自動跟上語言變更；前端切換語言時以已儲存的 config（savedConfig）為基底立即 PUT，不動草稿。
+**Architecture:** config é ‚å±¤æ–°å¢ž `language`ï¼ˆ`"auto" | "en" | "zh-TW"`ï¼Œé è¨­ `"auto"`ï¼‰ã€‚å¾Œç«¯æ–°å¢ž i18n æ¨¡çµ„ï¼ˆè‹±æ–‡åŽŸæ–‡ç‚ºéµ + zh-TW å­—å…¸ï¼‰ï¼Œç³»çµ±åŒ£æ¯ 2 ç§’é‡è®€ config è‡ªå‹•è·Ÿä¸Šèªžè¨€è®Šæ›´ï¼›å‰ç«¯åˆ‡æ›èªžè¨€æ™‚ä»¥å·²å„²å­˜çš„ configï¼ˆsavedConfigï¼‰ç‚ºåŸºåº•ç«‹å³ PUTï¼Œä¸å‹•è‰ç¨¿ã€‚
 
-**Tech Stack:** Python 3.10+ / FastAPI / pystray / pytest；React 19 + TypeScript + Vite；Markdown。
+**Tech Stack:** Python 3.10+ / FastAPI / pystray / pytestï¼›React 19 + TypeScript + Viteï¼›Markdownã€‚
 
-**Spec:** `docs/superpowers/specs/2026-10-27-i18n-language-config-design.md`（計畫以其為據，執行者兩份都讀）
+**Spec:** `docs/superpowers/specs/2026-10-27-i18n-language-config-design.md`ï¼ˆè¨ˆç•«ä»¥å…¶ç‚ºæ“šï¼ŒåŸ·è¡Œè€…å…©ä»½éƒ½è®€ï¼‰
 
 ## Global Constraints
 
-- `language` 值只能是 `"auto" | "en" | "zh-TW"`，預設 `"auto"`；非法值報 `ControlConfigError("language must be one of: auto, en, zh-TW")`。
-- `schema_version` 維持 1；舊 `bridge.yaml` 缺 `language` 一律解析為 `"auto"`。
-- 後端 i18n 不引入新依賴（無 gettext/babel）。
-- 專有名詞不翻譯：Stream Micro、Bridge、Dashboard、Stream Deck MK.2、OpenCode、Codex、Claude Code、Antigravity CLI、OpenChamber、`bridge.log`、`bridge.yaml`、uv、npm。
-- argparse help/usage、log 檔內容、API 錯誤 detail 維持英文。
-- Stream Deck 按鍵狀態縮寫（RUN/SUB/WAIT/DONE/ERR/IDLE/OFF）不翻譯。
-- zh-TR 文案一律台灣慣用繁體中文（不用簡體字、中國大陸用語）。
-- 測試跑法：`uv run pytest <file> -v`；前端驗證：`frontend/` 下 `npm run build`；commit 風格 conventional commits（feat:/fix:/docs:，英文）。
+- `language` å€¼åªèƒ½æ˜¯ `"auto" | "en" | "zh-TW"`ï¼Œé è¨­ `"auto"`ï¼›éžæ³•å€¼å ± `ControlConfigError("language must be one of: auto, en, zh-TW")`ã€‚
+- `schema_version` ç¶­æŒ 1ï¼›èˆŠ `bridge.yaml` ç¼º `language` ä¸€å¾‹è§£æžç‚º `"auto"`ã€‚
+- å¾Œç«¯ i18n ä¸å¼•å…¥æ–°ä¾è³´ï¼ˆç„¡ gettext/babelï¼‰ã€‚
+- å°ˆæœ‰åè©žä¸ç¿»è­¯ï¼šStream Microã€Bridgeã€Dashboardã€Stream Deck MK.2ã€OpenCodeã€Codexã€Claude Codeã€Antigravity CLIã€OpenChamberã€`bridge.log`ã€`bridge.yaml`ã€uvã€npmã€‚
+- argparse help/usageã€log æª”å…§å®¹ã€API éŒ¯èª¤ detail ç¶­æŒè‹±æ–‡ã€‚
+- Stream Deck æŒ‰éµç‹€æ…‹ç¸®å¯«ï¼ˆRUN/SUB/WAIT/DONE/ERR/IDLE/OFFï¼‰ä¸ç¿»è­¯ã€‚
+- zh-TR æ–‡æ¡ˆä¸€å¾‹å°ç£æ…£ç”¨ç¹é«”ä¸­æ–‡ï¼ˆä¸ç”¨ç°¡é«”å­—ã€ä¸­åœ‹å¤§é™¸ç”¨èªžï¼‰ã€‚
+- æ¸¬è©¦è·‘æ³•ï¼š`uv run pytest <file> -v`ï¼›å‰ç«¯é©—è­‰ï¼š`frontend/` ä¸‹ `npm run build`ï¼›commit é¢¨æ ¼ conventional commitsï¼ˆfeat:/fix:/docs:ï¼Œè‹±æ–‡ï¼‰ã€‚
 
 ## Review Focus
 
-1. **舊 `bridge.yaml`（無 `language` 欄位）**：解析不報錯且預設 `"auto"`，既有使用者升級零影響 → Task 1 測試釘住。
-2. **`language` 值非法（手改 yaml 打錯）**：整份 config 載入報 `ControlConfigError`（與其他欄位同等的嚴格驗證），不得靜默吞掉 → Task 1 測試釘住。
-3. **`bridge.yaml` 缺檔/壞檔時 tray 與 CLI 讀語言**：`language_from_config` 回 `"auto"`，不得拋例外 → Task 2 測試釘住。
-4. **系統匣語言切換後的 dedup**：`_last_status` 在語言變更時必須重置，否則 `check_health` 不會重送新語言的 title → Task 4 測試釘住。
-5. **前端有未存草稿時切語言**：PUT 以 savedConfig 為基底，草稿不外送、dirty 不變、之後 Save 不會把 language 蓋回舊值 → Task 5 手動驗證步驟釘住。
+1. **èˆŠ `bridge.yaml`ï¼ˆç„¡ `language` æ¬„ä½ï¼‰**ï¼šè§£æžä¸å ±éŒ¯ä¸”é è¨­ `"auto"`ï¼Œæ—¢æœ‰ä½¿ç”¨è€…å‡ç´šé›¶å½±éŸ¿ â†’ Task 1 æ¸¬è©¦é‡˜ä½ã€‚
+2. **`language` å€¼éžæ³•ï¼ˆæ‰‹æ”¹ yaml æ‰“éŒ¯ï¼‰**ï¼šæ•´ä»½ config è¼‰å…¥å ± `ControlConfigError`ï¼ˆèˆ‡å…¶ä»–æ¬„ä½åŒç­‰çš„åš´æ ¼é©—è­‰ï¼‰ï¼Œä¸å¾—éœé»˜åžæŽ‰ â†’ Task 1 æ¸¬è©¦é‡˜ä½ã€‚
+3. **`bridge.yaml` ç¼ºæª”/å£žæª”æ™‚ tray èˆ‡ CLI è®€èªžè¨€**ï¼š`language_from_config` å›ž `"auto"`ï¼Œä¸å¾—æ‹‹ä¾‹å¤– â†’ Task 2 æ¸¬è©¦é‡˜ä½ã€‚
+4. **ç³»çµ±åŒ£èªžè¨€åˆ‡æ›å¾Œçš„ dedup**ï¼š`_last_status` åœ¨èªžè¨€è®Šæ›´æ™‚å¿…é ˆé‡ç½®ï¼Œå¦å‰‡ `check_health` ä¸æœƒé‡é€æ–°èªžè¨€çš„ title â†’ Task 4 æ¸¬è©¦é‡˜ä½ã€‚
+5. **å‰ç«¯æœ‰æœªå­˜è‰ç¨¿æ™‚åˆ‡èªžè¨€**ï¼šPUT ä»¥ savedConfig ç‚ºåŸºåº•ï¼Œè‰ç¨¿ä¸å¤–é€ã€dirty ä¸è®Šã€ä¹‹å¾Œ Save ä¸æœƒæŠŠ language è“‹å›žèˆŠå€¼ â†’ Task 5 æ‰‹å‹•é©—è­‰æ­¥é©Ÿé‡˜ä½ã€‚
 
 ---
 
-### Task 1: Config 頂層 `language` 欄位
+### Task 1: Config é ‚å±¤ `language` æ¬„ä½
 
 **Files:**
-- Modify: `src/stream_micro/control_config.py`（`ControlConfig` dataclass、`parse_control_config`、`validate_control_config`）
-- Test: `tests/test_control_config.py`、`tests/test_server.py`（config round-trip 帶 `language`）
+- Modify: `src/stream_micro/control_config.py`ï¼ˆ`ControlConfig` dataclassã€`parse_control_config`ã€`validate_control_config`ï¼‰
+- Test: `tests/test_control_config.py`ã€`tests/test_server.py`ï¼ˆconfig round-trip å¸¶ `language`ï¼‰
 
 **Interfaces:**
-- Produces: `ControlConfig.language: str`（dataclass 欄位，預設 `"auto"`，放在 `session_window_bindings` 之後）；`parse_control_config` 接受頂層 `"language"` 鍵；`control_config_data()`（asdict）自動序列化它。後續所有任務依賴此欄位存在，前端 `GET /api/config` 也因此回傳它。
+- Produces: `ControlConfig.language: str`ï¼ˆdataclass æ¬„ä½ï¼Œé è¨­ `"auto"`ï¼Œæ”¾åœ¨ `session_window_bindings` ä¹‹å¾Œï¼‰ï¼›`parse_control_config` æŽ¥å—é ‚å±¤ `"language"` éµï¼›`control_config_data()`ï¼ˆasdictï¼‰è‡ªå‹•åºåˆ—åŒ–å®ƒã€‚å¾ŒçºŒæ‰€æœ‰ä»»å‹™ä¾è³´æ­¤æ¬„ä½å­˜åœ¨ï¼Œå‰ç«¯ `GET /api/config` ä¹Ÿå› æ­¤å›žå‚³å®ƒã€‚
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
-在 `tests/test_control_config.py` 以 `control_config_data(default_control_config())` 回傳的 dict 為基底建測試資料（round-trip 語意最乾淨）：
+åœ¨ `tests/test_control_config.py` ä»¥ `control_config_data(default_control_config())` å›žå‚³çš„ dict ç‚ºåŸºåº•å»ºæ¸¬è©¦è³‡æ–™ï¼ˆround-trip èªžæ„æœ€ä¹¾æ·¨ï¼‰ï¼š
 
 ```python
 def test_language_accepts_valid_values():
@@ -66,7 +66,7 @@ def test_language_round_trips_through_serialization():
     assert parse_control_config(control_config_data(config)).language == "zh-TW"
 ```
 
-另在 `tests/test_server.py` 沿既有 client 模式（fixture 同其他測試）加：
+å¦åœ¨ `tests/test_server.py` æ²¿æ—¢æœ‰ client æ¨¡å¼ï¼ˆfixture åŒå…¶ä»–æ¸¬è©¦ï¼‰åŠ ï¼š
 
 ```python
 def test_config_round_trip_preserves_language(tmp_path):
@@ -79,23 +79,23 @@ def test_config_round_trip_preserves_language(tmp_path):
     assert client.get("/api/config").json()["language"] == "zh-TW"
 ```
 
-（client/fixture 的確切寫法照該檔既有測試；斷言重點是 PUT 後再 GET `language` 仍是 `"zh-TW"`。）
+ï¼ˆclient/fixture çš„ç¢ºåˆ‡å¯«æ³•ç…§è©²æª”æ—¢æœ‰æ¸¬è©¦ï¼›æ–·è¨€é‡é»žæ˜¯ PUT å¾Œå† GET `language` ä»æ˜¯ `"zh-TW"`ã€‚ï¼‰
 
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `uv run pytest tests/test_control_config.py tests/test_server.py -v`
-Expected: FAIL（`ControlConfig` 沒有 `language`；`parse_control_config` 報 Unknown configuration section: language）
-
-- [ ] **Step 3: Implement in `src/stream_micro/control_config.py`**
-
-三處：dataclass 加 `language: str = "auto"`（放 `session_window_bindings` 之後，維持「有預設值的欄位在後」）；`parse_control_config` 的 `allowed` 集合加 `"language"`，建構時 `language=data.get("language", "auto")`；`validate_control_config` 加值檢查（不在三選一就 raise，訊息如 Global Constraints）。
-
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_control_config.py tests/test_server.py -v`
-Expected: PASS（含既有測試）
+Expected: FAILï¼ˆ`ControlConfig` æ²’æœ‰ `language`ï¼›`parse_control_config` å ± Unknown configuration section: languageï¼‰
 
-- [ ] **Step 5: Commit**
+- [x] **Step 3: Implement in `src/stream_micro/control_config.py`**
+
+ä¸‰è™•ï¼šdataclass åŠ  `language: str = "auto"`ï¼ˆæ”¾ `session_window_bindings` ä¹‹å¾Œï¼Œç¶­æŒã€Œæœ‰é è¨­å€¼çš„æ¬„ä½åœ¨å¾Œã€ï¼‰ï¼›`parse_control_config` çš„ `allowed` é›†åˆåŠ  `"language"`ï¼Œå»ºæ§‹æ™‚ `language=data.get("language", "auto")`ï¼›`validate_control_config` åŠ å€¼æª¢æŸ¥ï¼ˆä¸åœ¨ä¸‰é¸ä¸€å°± raiseï¼Œè¨Šæ¯å¦‚ Global Constraintsï¼‰ã€‚
+
+- [x] **Step 4: Run test to verify it passes**
+
+Run: `uv run pytest tests/test_control_config.py tests/test_server.py -v`
+Expected: PASSï¼ˆå«æ—¢æœ‰æ¸¬è©¦ï¼‰
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/stream_micro/control_config.py tests/test_control_config.py tests/test_server.py
@@ -104,24 +104,24 @@ git commit -m "feat: add language setting to Bridge configuration"
 
 ---
 
-### Task 2: 後端 i18n 模組
+### Task 2: å¾Œç«¯ i18n æ¨¡çµ„
 
 **Files:**
 - Create: `src/stream_micro/i18n.py`
 - Create: `tests/test_i18n.py`
 
 **Interfaces:**
-- Produces（Task 3、Task 4 消費）：
-  - `t(text: str, language: str) -> str` — `language` 是已解析的 `"en" | "zh-TW"`；查無鍵回傳原文。
-  - `resolve_language(language: str, *, ui_language: int | None = None) -> str` — 明確值原樣回傳；`"auto"`：有注入 `ui_language` 用它，否則用 `windows_ui_language()`；zh-Hant LANGID → `"zh-TW"`，其餘 → `"en"`。
-  - `windows_ui_language() -> int | None` — Windows 用 `ctypes.windll.kernel32.GetUserDefaultUILanguage()`；非 Windows 或任何例外回 `None`（測試用 monkeypatch 覆寫，不碰真機）。
-  - `language_from_config(config_path: Path) -> str` — `load_control_config(path).language`；任何例外（`ControlConfigError`、`OSError`、YAML）回 `"auto"`。
+- Producesï¼ˆTask 3ã€Task 4 æ¶ˆè²»ï¼‰ï¼š
+  - `t(text: str, language: str) -> str` â€” `language` æ˜¯å·²è§£æžçš„ `"en" | "zh-TW"`ï¼›æŸ¥ç„¡éµå›žå‚³åŽŸæ–‡ã€‚
+  - `resolve_language(language: str, *, ui_language: int | None = None) -> str` â€” æ˜Žç¢ºå€¼åŽŸæ¨£å›žå‚³ï¼›`"auto"`ï¼šæœ‰æ³¨å…¥ `ui_language` ç”¨å®ƒï¼Œå¦å‰‡ç”¨ `windows_ui_language()`ï¼›zh-Hant LANGID â†’ `"zh-TW"`ï¼Œå…¶é¤˜ â†’ `"en"`ã€‚
+  - `windows_ui_language() -> int | None` â€” Windows ç”¨ `ctypes.windll.kernel32.GetUserDefaultUILanguage()`ï¼›éž Windows æˆ–ä»»ä½•ä¾‹å¤–å›ž `None`ï¼ˆæ¸¬è©¦ç”¨ monkeypatch è¦†å¯«ï¼Œä¸ç¢°çœŸæ©Ÿï¼‰ã€‚
+  - `language_from_config(config_path: Path) -> str` â€” `load_control_config(path).language`ï¼›ä»»ä½•ä¾‹å¤–ï¼ˆ`ControlConfigError`ã€`OSError`ã€YAMLï¼‰å›ž `"auto"`ã€‚
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_t_returns_translation_and_falls_back():
-    assert t("Bridge running", "zh-TW") == "Bridge 執行中"
+    assert t("Bridge running", "zh-TW") == "Bridge åŸ·è¡Œä¸­"
     assert t("Bridge running", "en") == "Bridge running"
     assert t("not in dictionary", "zh-TW") == "not in dictionary"
 
@@ -150,44 +150,44 @@ def test_language_from_config_reads_and_falls_back(tmp_path):
     assert language_from_config(bad) == "auto"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_i18n.py -v`
-Expected: FAIL（模組不存在）
+Expected: FAILï¼ˆæ¨¡çµ„ä¸å­˜åœ¨ï¼‰
 
-- [ ] **Step 3: Implement `src/stream_micro/i18n.py`**
+- [x] **Step 3: Implement `src/stream_micro/i18n.py`**
 
-結構照 `frontend/src/i18n.ts` 的做法：英文原文為鍵的 `ZH_TW: dict[str, str]`、`t()` 查字典。zh-TW 文案如下（選單五條沿用現行寫死的繁中，其餘為本計畫定稿）：
+çµæ§‹ç…§ `frontend/src/i18n.ts` çš„åšæ³•ï¼šè‹±æ–‡åŽŸæ–‡ç‚ºéµçš„ `ZH_TW: dict[str, str]`ã€`t()` æŸ¥å­—å…¸ã€‚zh-TW æ–‡æ¡ˆå¦‚ä¸‹ï¼ˆé¸å–®äº”æ¢æ²¿ç”¨ç¾è¡Œå¯«æ­»çš„ç¹ä¸­ï¼Œå…¶é¤˜ç‚ºæœ¬è¨ˆç•«å®šç¨¿ï¼‰ï¼š
 
 ```python
 ZH_TW = {
-    "Open Dashboard": "開啟 Dashboard",
-    "Restart Bridge": "重新啟動 Bridge",
-    "Stop Bridge": "停止 Bridge",
-    "Run at log in": "登入自動啟動",
-    "Exit": "結束",
-    "Starting": "啟動中",
-    "Stopping Bridge": "正在停止 Bridge",
-    "Starting Bridge": "正在啟動 Bridge",
-    "Bridge stopped": "Bridge 已停止",
-    "Bridge running": "Bridge 執行中",
-    "Bridge stopped or not responding": "Bridge 已停止或沒有回應",
-    "Operation failed; see bridge.log": "操作失敗；請查看 bridge.log",
-    "created Bridge configuration at {path}": "已建立 Bridge 設定檔：{path}",
-    "stopped": "已停止",
+    "Open Dashboard": "é–‹å•Ÿ Dashboard",
+    "Restart Bridge": "é‡æ–°å•Ÿå‹• Bridge",
+    "Stop Bridge": "åœæ­¢ Bridge",
+    "Run at log in": "ç™»å…¥è‡ªå‹•å•Ÿå‹•",
+    "Exit": "çµæŸ",
+    "Starting": "å•Ÿå‹•ä¸­",
+    "Stopping Bridge": "æ­£åœ¨åœæ­¢ Bridge",
+    "Starting Bridge": "æ­£åœ¨å•Ÿå‹• Bridge",
+    "Bridge stopped": "Bridge å·²åœæ­¢",
+    "Bridge running": "Bridge åŸ·è¡Œä¸­",
+    "Bridge stopped or not responding": "Bridge å·²åœæ­¢æˆ–æ²’æœ‰å›žæ‡‰",
+    "Operation failed; see bridge.log": "æ“ä½œå¤±æ•—ï¼›è«‹æŸ¥çœ‹ bridge.log",
+    "created Bridge configuration at {path}": "å·²å»ºç«‹ Bridge è¨­å®šæª”ï¼š{path}",
+    "stopped": "å·²åœæ­¢",
     "Stream Micro could not start. Check bridge.log and run uv sync --dev in the project folder, then try again.":
-        "Stream Micro 無法啟動。請查看 bridge.log，在專案資料夾執行 uv sync --dev 後再試一次。",
+        "Stream Micro ç„¡æ³•å•Ÿå‹•ã€‚è«‹æŸ¥çœ‹ bridge.logï¼Œåœ¨å°ˆæ¡ˆè³‡æ–™å¤¾åŸ·è¡Œ uv sync --dev å¾Œå†è©¦ä¸€æ¬¡ã€‚",
 }
 ```
 
-`resolve_language` 的 LANGID 對照：`0x0404/0x0C04/0x1404` → `"zh-TW"`，其餘 `"en"`。
+`resolve_language` çš„ LANGID å°ç…§ï¼š`0x0404/0x0C04/0x1404` â†’ `"zh-TW"`ï¼Œå…¶é¤˜ `"en"`ã€‚
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_i18n.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/stream_micro/i18n.py tests/test_i18n.py
@@ -196,24 +196,24 @@ git commit -m "feat: add backend i18n for tray and CLI strings"
 
 ---
 
-### Task 3: CLI 訊息本地化
+### Task 3: CLI è¨Šæ¯æœ¬åœ°åŒ–
 
 **Files:**
 - Modify: `src/stream_micro/cli.py`
 - Test: `tests/test_cli.py`
 
 **Interfaces:**
-- Consumes: `t`、`resolve_language`、`language_from_config`（Task 2）。`cli.py` 以 `from .i18n import ...` 匯入，測試以 `monkeypatch.setattr("stream_micro.cli.resolve_language", ...)` 固定語言（不依賴測試機的 Windows locale）。
+- Consumes: `t`ã€`resolve_language`ã€`language_from_config`ï¼ˆTask 2ï¼‰ã€‚`cli.py` ä»¥ `from .i18n import ...` åŒ¯å…¥ï¼Œæ¸¬è©¦ä»¥ `monkeypatch.setattr("stream_micro.cli.resolve_language", ...)` å›ºå®šèªžè¨€ï¼ˆä¸ä¾è³´æ¸¬è©¦æ©Ÿçš„ Windows localeï¼‰ã€‚
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
-沿用 `tests/test_cli.py` 既有模式（monkeypatch `stream_micro.runtime.BridgeRuntime`，見 `test_serve_creates_separate_bridge_configuration`）加 `capsys`：
+æ²¿ç”¨ `tests/test_cli.py` æ—¢æœ‰æ¨¡å¼ï¼ˆmonkeypatch `stream_micro.runtime.BridgeRuntime`ï¼Œè¦‹ `test_serve_creates_separate_bridge_configuration`ï¼‰åŠ  `capsys`ï¼š
 
 ```python
 def test_created_config_message_follows_language(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "resolve_language", lambda language, **_kw: "zh-TW")
     assert cli.main(["serve", "--bridge-config", str(tmp_path / "bridge.yaml")]) == 0
-    assert "stream-micro: 已建立 Bridge 設定檔：" in capsys.readouterr().out
+    assert "stream-micro: å·²å»ºç«‹ Bridge è¨­å®šæª”ï¼š" in capsys.readouterr().out
 
 def test_created_config_message_stays_english_by_default(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "resolve_language", lambda language, **_kw: "en")
@@ -221,27 +221,27 @@ def test_created_config_message_stays_english_by_default(tmp_path, monkeypatch, 
     assert "stream-micro: created Bridge configuration at" in capsys.readouterr().out
 ```
 
-（兩個測試的 monkeypatch lambda 都收 `**_kw`，簽名對上 Task 2 的 keyword-only `ui_language`。）
+ï¼ˆå…©å€‹æ¸¬è©¦çš„ monkeypatch lambda éƒ½æ”¶ `**_kw`ï¼Œç°½åå°ä¸Š Task 2 çš„ keyword-only `ui_language`ã€‚ï¼‰
 
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `uv run pytest tests/test_cli.py -v`
-Expected: FAIL（訊息仍是英文）
-
-- [ ] **Step 3: Implement in `src/stream_micro/cli.py`**
-
-- `main()` 的 serve/tray 分支前：`lang = resolve_language(language_from_config(args.bridge_config))`；`--demo` 與 legacy `run` 分支不動。
-- 建檔訊息：`print(f"stream-micro: {t('created Bridge configuration at {path}', lang).format(path=args.bridge_config)}")`。
-- tray 啟動失敗的 MessageBoxW 內文改 `t("Stream Micro could not start. ...", lang)`（標題 `"Stream Micro"` 不譯）。
-- `except KeyboardInterrupt`：`print(f"stream-micro: {t('stopped', resolve_language(language_from_config(args.bridge_config)))}")`（此分支可能早於 `lang` 定義，直接重算）。
-- `except (ConfigError, ...)` 的 `stream-micro: {exc}` 行不譯（exc 內容是開發者導向）。
-
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_cli.py -v`
-Expected: PASS（含既有兩個測試）
+Expected: FAILï¼ˆè¨Šæ¯ä»æ˜¯è‹±æ–‡ï¼‰
 
-- [ ] **Step 5: Commit**
+- [x] **Step 3: Implement in `src/stream_micro/cli.py`**
+
+- `main()` çš„ serve/tray åˆ†æ”¯å‰ï¼š`lang = resolve_language(language_from_config(args.bridge_config))`ï¼›`--demo` èˆ‡ legacy `run` åˆ†æ”¯ä¸å‹•ã€‚
+- å»ºæª”è¨Šæ¯ï¼š`print(f"stream-micro: {t('created Bridge configuration at {path}', lang).format(path=args.bridge_config)}")`ã€‚
+- tray å•Ÿå‹•å¤±æ•—çš„ MessageBoxW å…§æ–‡æ”¹ `t("Stream Micro could not start. ...", lang)`ï¼ˆæ¨™é¡Œ `"Stream Micro"` ä¸è­¯ï¼‰ã€‚
+- `except KeyboardInterrupt`ï¼š`print(f"stream-micro: {t('stopped', resolve_language(language_from_config(args.bridge_config)))}")`ï¼ˆæ­¤åˆ†æ”¯å¯èƒ½æ—©æ–¼ `lang` å®šç¾©ï¼Œç›´æŽ¥é‡ç®—ï¼‰ã€‚
+- `except (ConfigError, ...)` çš„ `stream-micro: {exc}` è¡Œä¸è­¯ï¼ˆexc å…§å®¹æ˜¯é–‹ç™¼è€…å°Žå‘ï¼‰ã€‚
+
+- [x] **Step 4: Run test to verify it passes**
+
+Run: `uv run pytest tests/test_cli.py -v`
+Expected: PASSï¼ˆå«æ—¢æœ‰å…©å€‹æ¸¬è©¦ï¼‰
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/stream_micro/cli.py tests/test_cli.py
@@ -250,19 +250,19 @@ git commit -m "feat: localize CLI messages"
 
 ---
 
-### Task 4: 系統匣本地化與自動跟隨語言
+### Task 4: ç³»çµ±åŒ£æœ¬åœ°åŒ–èˆ‡è‡ªå‹•è·Ÿéš¨èªžè¨€
 
 **Files:**
 - Modify: `src/stream_micro/tray.py`
 - Test: `tests/test_tray.py`
 
 **Interfaces:**
-- Consumes: `t`、`resolve_language`、`language_from_config`（Task 2）。
-- Produces: `TrayController.__init__(self, runtime, present, open_url, *, probe=probe_bridge, language="en", language_provider=None, on_language=None)`（新參數皆 keyword-only、有預設，既有測試建構式不破）；屬性 `language: str`（已解析值）；`set_language(language: str) -> None`（變更時更新並把 `_last_status` 重置為 None）。`main()` 傳入以 config 檔為來源的 provider。
+- Consumes: `t`ã€`resolve_language`ã€`language_from_config`ï¼ˆTask 2ï¼‰ã€‚
+- Produces: `TrayController.__init__(self, runtime, present, open_url, *, probe=probe_bridge, language="en", language_provider=None, on_language=None)`ï¼ˆæ–°åƒæ•¸çš† keyword-onlyã€æœ‰é è¨­ï¼Œæ—¢æœ‰æ¸¬è©¦å»ºæ§‹å¼ä¸ç ´ï¼‰ï¼›å±¬æ€§ `language: str`ï¼ˆå·²è§£æžå€¼ï¼‰ï¼›`set_language(language: str) -> None`ï¼ˆè®Šæ›´æ™‚æ›´æ–°ä¸¦æŠŠ `_last_status` é‡ç½®ç‚º Noneï¼‰ã€‚`main()` å‚³å…¥ä»¥ config æª”ç‚ºä¾†æºçš„ providerã€‚
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
-在 `tests/test_tray.py` 沿用既有 `Runtime` fake 與 views-list 模式：
+åœ¨ `tests/test_tray.py` æ²¿ç”¨æ—¢æœ‰ `Runtime` fake èˆ‡ views-list æ¨¡å¼ï¼š
 
 ```python
 def test_status_strings_follow_language():
@@ -271,7 +271,7 @@ def test_status_strings_follow_language():
     controller = tray.TrayController(runtime, lambda *s: views.append(s), lambda _: None,
                                      probe=lambda _url: False, language="zh-TW")
     controller.handle("stop")
-    assert views[-1] == ("red", "Bridge 已停止")
+    assert views[-1] == ("red", "Bridge å·²åœæ­¢")
     controller.set_language("en")
     controller.check_health()
     assert views[-1] == ("red", "Bridge stopped or not responding")
@@ -284,8 +284,8 @@ def test_language_change_represents_unchanged_status():
     controller.handle("restart")  # ends green "Bridge running"
     seen = len(views)
     controller.set_language("zh-TW")
-    controller.check_health()  # 狀態沒變，但語言變了 → 必須重送
-    assert views[seen] == ("green", "Bridge 執行中")
+    controller.check_health()  # ç‹€æ…‹æ²’è®Šï¼Œä½†èªžè¨€è®Šäº† â†’ å¿…é ˆé‡é€
+    assert views[seen] == ("green", "Bridge åŸ·è¡Œä¸­")
 
 def test_run_loop_follows_language_provider():
     runtime = Runtime()
@@ -303,26 +303,26 @@ def test_run_loop_follows_language_provider():
     assert languages == ["zh-TW"]
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_tray.py -v`
-Expected: FAIL（`TrayController` 無 `language` 參數）
+Expected: FAILï¼ˆ`TrayController` ç„¡ `language` åƒæ•¸ï¼‰
 
-- [ ] **Step 3: Implement in `src/stream_micro/tray.py`**
+- [x] **Step 3: Implement in `src/stream_micro/tray.py`**
 
-- `handle`／`check_health` 的字串全部改 `t(text, self.language)`：Starting、Stopping Bridge、Starting Bridge、Bridge stopped、Bridge running、Bridge stopped or not responding、Operation failed; see bridge.log（鍵同 Task 2 字典）。
-- `set_language`：不同才動作；更新 `self.language`、`self._last_status = None`。
-- `run()` 每圈循環開頭：`if self.language_provider is not None: self.set_language(self.language_provider())`，`set_language` 內變更時呼叫 `on_language(new)`（有的話）。
-- `main()`：`controller.language = resolve_language(language_from_config(config_path))`；`language_provider = lambda: resolve_language(language_from_config(config_path))`、`on_language` 呼叫 `icon.update_menu()`。
-- 選單：MenuItem 的 text 改 callable——`pystray.MenuItem(lambda _item: t("Open Dashboard", controller.language), enqueue("open"), default=True)` 等五項（含 `checked` 的登入自動啟動），`icon.update_menu()` 會以新語言重繪。
-- icon 初始 title 的 `"Stream Micro: Starting"`：text 部分改 `t("Starting", controller.language)`；前綴 `"Stream Micro: "` 不譯。
+- `handle`ï¼`check_health` çš„å­—ä¸²å…¨éƒ¨æ”¹ `t(text, self.language)`ï¼šStartingã€Stopping Bridgeã€Starting Bridgeã€Bridge stoppedã€Bridge runningã€Bridge stopped or not respondingã€Operation failed; see bridge.logï¼ˆéµåŒ Task 2 å­—å…¸ï¼‰ã€‚
+- `set_language`ï¼šä¸åŒæ‰å‹•ä½œï¼›æ›´æ–° `self.language`ã€`self._last_status = None`ã€‚
+- `run()` æ¯åœˆå¾ªç’°é–‹é ­ï¼š`if self.language_provider is not None: self.set_language(self.language_provider())`ï¼Œ`set_language` å…§è®Šæ›´æ™‚å‘¼å« `on_language(new)`ï¼ˆæœ‰çš„è©±ï¼‰ã€‚
+- `main()`ï¼š`controller.language = resolve_language(language_from_config(config_path))`ï¼›`language_provider = lambda: resolve_language(language_from_config(config_path))`ã€`on_language` å‘¼å« `icon.update_menu()`ã€‚
+- é¸å–®ï¼šMenuItem çš„ text æ”¹ callableâ€”â€”`pystray.MenuItem(lambda _item: t("Open Dashboard", controller.language), enqueue("open"), default=True)` ç­‰äº”é …ï¼ˆå« `checked` çš„ç™»å…¥è‡ªå‹•å•Ÿå‹•ï¼‰ï¼Œ`icon.update_menu()` æœƒä»¥æ–°èªžè¨€é‡ç¹ªã€‚
+- icon åˆå§‹ title çš„ `"Stream Micro: Starting"`ï¼štext éƒ¨åˆ†æ”¹ `t("Starting", controller.language)`ï¼›å‰ç¶´ `"Stream Micro: "` ä¸è­¯ã€‚
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_tray.py -v`
-Expected: PASS（含既有全部測試——dedup、restart/stop/exit、probe 例外等）
+Expected: PASSï¼ˆå«æ—¢æœ‰å…¨éƒ¨æ¸¬è©¦â€”â€”dedupã€restart/stop/exitã€probe ä¾‹å¤–ç­‰ï¼‰
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/stream_micro/tray.py tests/test_tray.py
@@ -331,22 +331,22 @@ git commit -m "feat: localize tray menu and status with live language follow"
 
 ---
 
-### Task 5: 前端 config 驅動語言與切換即存
+### Task 5: å‰ç«¯ config é©…å‹•èªžè¨€èˆ‡åˆ‡æ›å³å­˜
 
 **Files:**
-- Modify: `frontend/src/main.tsx`（`type Config`、`switchLang`、config 載入後套用語言）
-- Modify: `frontend/src/i18n.ts`（無需改動；沿用 `setLang`/`getLang`）
+- Modify: `frontend/src/main.tsx`ï¼ˆ`type Config`ã€`switchLang`ã€config è¼‰å…¥å¾Œå¥—ç”¨èªžè¨€ï¼‰
+- Modify: `frontend/src/i18n.ts`ï¼ˆç„¡éœ€æ”¹å‹•ï¼›æ²¿ç”¨ `setLang`/`getLang`ï¼‰
 
 **Interfaces:**
-- Consumes: `GET /api/config` 回傳含 `language`（Task 1）；既有 `api<T>(path, options)` helper 與 `setLang`/`getLang`。
-- Produces: `type Config` 增 `language?: "auto" | "en" | "zh-TW"`。
+- Consumes: `GET /api/config` å›žå‚³å« `language`ï¼ˆTask 1ï¼‰ï¼›æ—¢æœ‰ `api<T>(path, options)` helper èˆ‡ `setLang`/`getLang`ã€‚
+- Produces: `type Config` å¢ž `language?: "auto" | "en" | "zh-TW"`ã€‚
 
-（本 repo 前端無單元測試框架（`npm test` = `npm run build`），本任務以 tsc 建置與手動驗證代替 failing-test 循環。）
+ï¼ˆæœ¬ repo å‰ç«¯ç„¡å–®å…ƒæ¸¬è©¦æ¡†æž¶ï¼ˆ`npm test` = `npm run build`ï¼‰ï¼Œæœ¬ä»»å‹™ä»¥ tsc å»ºç½®èˆ‡æ‰‹å‹•é©—è­‰ä»£æ›¿ failing-test å¾ªç’°ã€‚ï¼‰
 
-- [ ] **Step 1: Implement in `frontend/src/main.tsx`**
+- [x] **Step 1: Implement in `frontend/src/main.tsx`**
 
-- `type Config` 加 `language?: "auto" | "en" | "zh-TW"`。
-- `switchLang` 改 async：
+- `type Config` åŠ  `language?: "auto" | "en" | "zh-TW"`ã€‚
+- `switchLang` æ”¹ asyncï¼š
 
 ```tsx
 const switchLang = async () => {
@@ -364,24 +364,24 @@ const switchLang = async () => {
 };
 ```
 
-（注意：PUT 以 `savedConfig` 為基底——草稿不外送；成功後草稿的 `language` 也更新，之後 Save 不會蓋回舊值；`dirty` 狀態完全不動。）
+ï¼ˆæ³¨æ„ï¼šPUT ä»¥ `savedConfig` ç‚ºåŸºåº•â€”â€”è‰ç¨¿ä¸å¤–é€ï¼›æˆåŠŸå¾Œè‰ç¨¿çš„ `language` ä¹Ÿæ›´æ–°ï¼Œä¹‹å¾Œ Save ä¸æœƒè“‹å›žèˆŠå€¼ï¼›`dirty` ç‹€æ…‹å®Œå…¨ä¸å‹•ã€‚ï¼‰
 
-- config 載入處（`refresh` 中 `setConfig` 的位置）：`if (nextConfig.language === "en" || nextConfig.language === "zh-TW") { if (getLang() !== nextConfig.language) { setLang(nextConfig.language); setLangState(nextConfig.language); } }`。`"auto"` 不覆蓋 `initialLang` 的結果（維持現行 localStorage → 瀏覽器偵測）。
-- `switchLang` 的 onClick 改 `() => void switchLang()`。
+- config è¼‰å…¥è™•ï¼ˆ`refresh` ä¸­ `setConfig` çš„ä½ç½®ï¼‰ï¼š`if (nextConfig.language === "en" || nextConfig.language === "zh-TW") { if (getLang() !== nextConfig.language) { setLang(nextConfig.language); setLangState(nextConfig.language); } }`ã€‚`"auto"` ä¸è¦†è“‹ `initialLang` çš„çµæžœï¼ˆç¶­æŒç¾è¡Œ localStorage â†’ ç€è¦½å™¨åµæ¸¬ï¼‰ã€‚
+- `switchLang` çš„ onClick æ”¹ `() => void switchLang()`ã€‚
 
-- [ ] **Step 2: Build to verify**
+- [x] **Step 2: Build to verify**
 
-Run（在 `frontend/`）: `npm run build`
-Expected: tsc 與 vite build 通過，無型別錯誤
+Runï¼ˆåœ¨ `frontend/`ï¼‰: `npm run build`
+Expected: tsc èˆ‡ vite build é€šéŽï¼Œç„¡åž‹åˆ¥éŒ¯èª¤
 
-- [ ] **Step 3: Manual verification（有真機時）**
+- [x] **Step 3: Manual verificationï¼ˆæœ‰çœŸæ©Ÿæ™‚ï¼‰**
 
-1. `uv run stream-micro serve`，開 Dashboard，切到某服務改一個值（不按 Save）。
-2. 切語言 → UI 即時換語言、未存提示仍在（dirty 未動）、重新整理後語言維持新值、`bridge.yaml` 的 `language` 已更新。
-3. 回 Dashboard 按存下的 Save → 其他修改套用且 `language` 未被蓋回。
-4. 系統匣選單與提示在 ~2 秒內跟著換語言。
+1. `uv run stream-micro serve`ï¼Œé–‹ Dashboardï¼Œåˆ‡åˆ°æŸæœå‹™æ”¹ä¸€å€‹å€¼ï¼ˆä¸æŒ‰ Saveï¼‰ã€‚
+2. åˆ‡èªžè¨€ â†’ UI å³æ™‚æ›èªžè¨€ã€æœªå­˜æç¤ºä»åœ¨ï¼ˆdirty æœªå‹•ï¼‰ã€é‡æ–°æ•´ç†å¾Œèªžè¨€ç¶­æŒæ–°å€¼ã€`bridge.yaml` çš„ `language` å·²æ›´æ–°ã€‚
+3. å›ž Dashboard æŒ‰å­˜ä¸‹çš„ Save â†’ å…¶ä»–ä¿®æ”¹å¥—ç”¨ä¸” `language` æœªè¢«è“‹å›žã€‚
+4. ç³»çµ±åŒ£é¸å–®èˆ‡æç¤ºåœ¨ ~2 ç§’å…§è·Ÿè‘—æ›èªžè¨€ã€‚
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/src/main.tsx
@@ -390,37 +390,37 @@ git commit -m "feat: persist Dashboard language in Bridge configuration"
 
 ---
 
-### Task 6: README 雙語
+### Task 6: README é›™èªž
 
 **Files:**
-- Modify: `README.md`（副標行下加語言切換行）
+- Modify: `README.md`ï¼ˆå‰¯æ¨™è¡Œä¸‹åŠ èªžè¨€åˆ‡æ›è¡Œï¼‰
 - Create: `README.zh-TW.md`
 
 **Interfaces:**
-- Consumes: 無（獨立任務，但 zh-TW 文案語彙須與 Task 2 字典一致——Bridge、Dashboard 等專有名詞不譯）。
+- Consumes: ç„¡ï¼ˆç¨ç«‹ä»»å‹™ï¼Œä½† zh-TW æ–‡æ¡ˆèªžå½™é ˆèˆ‡ Task 2 å­—å…¸ä¸€è‡´â€”â€”Bridgeã€Dashboard ç­‰å°ˆæœ‰åè©žä¸è­¯ï¼‰ã€‚
 
-- [ ] **Step 1: Add the language switcher to `README.md`**
+- [x] **Step 1: Add the language switcher to `README.md`**
 
-在副標（`**Your AI sessions and usage, at a glance on your Stream Deck.**`）下方空一行加：
+åœ¨å‰¯æ¨™ï¼ˆ`**Your AI sessions and usage, at a glance on your Stream Deck.**`ï¼‰ä¸‹æ–¹ç©ºä¸€è¡ŒåŠ ï¼š
 
 ```markdown
-English | [繁體中文](README.zh-TW.md)
+English | [ç¹é«”ä¸­æ–‡](README.zh-TW.md)
 ```
 
-- [ ] **Step 2: Create `README.zh-TW.md`**
+- [x] **Step 2: Create `README.zh-TW.md`**
 
-- 開頭：`# stream-micro`（產品名不譯）、繁中副標、切換行 `[English](README.md) | 繁體中文`。
-- 逐節對應翻譯 `README.md` 全部小節；圖片相對路徑、指令區塊、資料夾/檔名、連結目標原樣保留（從 repo root 相對路徑兩份相同）。
-- 連往 `integrations/*/README.md` 的連結文字保留英文原字。
-- 文案是台灣慣用繁體中文；行為描述以英文版為準，翻譯不得改動任何承諾（如「Windows only」的範圍）。
-- README 既有「support for English and Traditional Chinese」的描述照翻。
+- é–‹é ­ï¼š`# stream-micro`ï¼ˆç”¢å“åä¸è­¯ï¼‰ã€ç¹ä¸­å‰¯æ¨™ã€åˆ‡æ›è¡Œ `[English](README.md) | ç¹é«”ä¸­æ–‡`ã€‚
+- é€ç¯€å°æ‡‰ç¿»è­¯ `README.md` å…¨éƒ¨å°ç¯€ï¼›åœ–ç‰‡ç›¸å°è·¯å¾‘ã€æŒ‡ä»¤å€å¡Šã€è³‡æ–™å¤¾/æª”åã€é€£çµç›®æ¨™åŽŸæ¨£ä¿ç•™ï¼ˆå¾ž repo root ç›¸å°è·¯å¾‘å…©ä»½ç›¸åŒï¼‰ã€‚
+- é€£å¾€ `integrations/*/README.md` çš„é€£çµæ–‡å­—ä¿ç•™è‹±æ–‡åŽŸå­—ã€‚
+- æ–‡æ¡ˆæ˜¯å°ç£æ…£ç”¨ç¹é«”ä¸­æ–‡ï¼›è¡Œç‚ºæè¿°ä»¥è‹±æ–‡ç‰ˆç‚ºæº–ï¼Œç¿»è­¯ä¸å¾—æ”¹å‹•ä»»ä½•æ‰¿è«¾ï¼ˆå¦‚ã€ŒWindows onlyã€çš„ç¯„åœï¼‰ã€‚
+- README æ—¢æœ‰ã€Œsupport for English and Traditional Chineseã€çš„æè¿°ç…§ç¿»ã€‚
 
-- [ ] **Step 3: Verify links and images**
+- [x] **Step 3: Verify links and images**
 
-Run: `git diff --stat README.md` 與目視檢查 `README.zh-TW.md` 中所有相對連結與圖片路徑在 repo 中存在。
-Expected: 兩份 README 的圖片路徑都指向 `docs/images/` 下既有檔案
+Run: `git diff --stat README.md` èˆ‡ç›®è¦–æª¢æŸ¥ `README.zh-TW.md` ä¸­æ‰€æœ‰ç›¸å°é€£çµèˆ‡åœ–ç‰‡è·¯å¾‘åœ¨ repo ä¸­å­˜åœ¨ã€‚
+Expected: å…©ä»½ README çš„åœ–ç‰‡è·¯å¾‘éƒ½æŒ‡å‘ `docs/images/` ä¸‹æ—¢æœ‰æª”æ¡ˆ
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add README.md README.zh-TW.md
@@ -429,27 +429,27 @@ git commit -m "docs: add Traditional Chinese README"
 
 ---
 
-### Task 7: 全套驗證
+### Task 7: å…¨å¥—é©—è­‰
 
 **Files:**
-- 無新變更（只驗證；若發現跨任務回歸，修在哪個任務的檔案就歸那個 commit）
+- ç„¡æ–°è®Šæ›´ï¼ˆåªé©—è­‰ï¼›è‹¥ç™¼ç¾è·¨ä»»å‹™å›žæ­¸ï¼Œä¿®åœ¨å“ªå€‹ä»»å‹™çš„æª”æ¡ˆå°±æ­¸é‚£å€‹ commitï¼‰
 
 **Interfaces:**
-- Consumes: 全部任務。
+- Consumes: å…¨éƒ¨ä»»å‹™ã€‚
 
-- [ ] **Step 1: Run the full backend suite**
+- [x] **Step 1: Run the full backend suite**
 
 Run: `uv run pytest -v`
-Expected: 全綠（注意 `tests/test_server.py` 既有的 config round-trip 測試——GET 回的 config 現在含 `language`，PUT 回去必須照樣 200）
+Expected: å…¨ç¶ ï¼ˆæ³¨æ„ `tests/test_server.py` æ—¢æœ‰çš„ config round-trip æ¸¬è©¦â€”â€”GET å›žçš„ config ç¾åœ¨å« `language`ï¼ŒPUT å›žåŽ»å¿…é ˆç…§æ¨£ 200ï¼‰
 
-- [ ] **Step 2: Lint**
+- [x] **Step 2: Lint**
 
 Run: `uv run ruff check`
-Expected: 無發現
+Expected: ç„¡ç™¼ç¾
 
-- [ ] **Step 3: Frontend build**
+- [x] **Step 3: Frontend build**
 
-Run（在 `frontend/`）: `npm run build`
-Expected: 通過
+Runï¼ˆåœ¨ `frontend/`ï¼‰: `npm run build`
+Expected: é€šéŽ
 
-- [ ] **Step 4: 若全綠，工作完成；若有紅，修到綠再收**
+- [x] **Step 4: è‹¥å…¨ç¶ ï¼Œå·¥ä½œå®Œæˆï¼›è‹¥æœ‰ç´…ï¼Œä¿®åˆ°ç¶ å†æ”¶**
