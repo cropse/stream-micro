@@ -59,9 +59,11 @@ before running `uv sync` if Windows reports that `stream-micro.exe` is in use.
 ## Portable Windows executable
 
 Download and extract the Windows zip to any folder, then double-click
-`StreamMicro.exe`. `bridge.yaml`, `.state/`, and `bridge.log` are created beside
-the executable. To update, extract a new zip over the existing folder; the zip
-never contains settings. After moving the folder, re-enable **登入自動啟動**
+`StreamMicro.exe`. Settings (`bridge.yaml`), logs (`bridge.log`), and quota state
+(`.state/`, created when a plugin first uses it) live beside the executable.
+To update, exit Stream Micro from the tray menu (**結束**), extract the new zip
+over the existing folder, then relaunch; the zip never contains settings.
+After moving the folder, re-enable **登入自動啟動**
 and reinstall the Claude companion from the Dashboard if you use it.
 
 To build the executable from source:

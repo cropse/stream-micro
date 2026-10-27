@@ -29,9 +29,11 @@ class StartupRegistration:
         directory = startup_dir if startup_dir is not None else startup_directory()
         self.path = directory / ("StreamMicro-" + config_key(config_path) + ".vbs")
         if self.frozen:
-            command = subprocess.list2cmdline([
-                str(executable.resolve() if executable is not None else Path(sys.executable)),
-            ])
+            exe = (executable if executable is not None else Path(sys.executable)).resolve()
+            arguments = [str(exe)]
+            if self.config_path != (exe.parent / "bridge.yaml").resolve():
+                arguments.extend(["--bridge-config", str(self.config_path)])
+            command = subprocess.list2cmdline(arguments)
         else:
             command = subprocess.list2cmdline([
                 str(self.pythonw), "-m", "stream_micro.cli", "tray",
