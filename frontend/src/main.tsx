@@ -1153,6 +1153,35 @@ function App() {
   const dirtyRef = useRef(false);
   // The configuration as last saved, to mark unsaved services.
   const [savedConfig, setSavedConfig] = useState<Config | null>(null);
+  // Mirror of savedConfig for async writers: a queued payload is built when
+  // its turn starts, so it must read the latest acknowledged config rather
+  // than the one an older render captured.
+  const savedConfigRef = useRef<Config | null>(null);
+  const applySavedConfig = (nextSaved: Config) => {
+    savedConfigRef.current = nextSaved;
+    setSavedConfig(nextSaved);
+  };
+  // Serializes config PUTs: a language switch and a Save that overlap must
+  // not restore settings the other has already superseded.
+  const configWriteRef = useRef<Promise<Config> | null>(null);
+  const enqueueConfigWrite = (build: () => Config): Promise<Config> => {
+    const previous = configWriteRef.current ?? Promise.resolve();
+    const write = previous.catch(() => undefined).then(async () => {
+      const saved = await api<Config>("config", { method: "PUT", body: JSON.stringify(build()) });
+      applySavedConfig(saved);
+      return saved;
+    });
+    configWriteRef.current = write;
+    void write.catch(() => undefined).finally(() => {
+      if (configWriteRef.current === write) configWriteRef.current = null;
+    });
+    return write;
+  };
+  const writeLanguage = (next: Lang) => enqueueConfigWrite(() => {
+    const latest = savedConfigRef.current;
+    if (latest === null) throw new Error("No saved configuration to switch the language of");
+    return { ...latest, language: next };
+  });
   const [claudeSetup, setClaudeSetup] = useState<ClaudeSetup | null>(null);
   const [setupSkipped, setSetupSkipped] = useState<string[]>(readSkipped);
   const skipSetup = (part: string, skip: boolean) => setSetupSkipped((current) => {
@@ -1173,13 +1202,16 @@ function App() {
     const next: Lang = lang === "en" ? "zh-TW" : "en";
     setLang(next);
     setLangState(next);
+    // Align the draft at click time, so a Save that runs right after this
+    // cannot write the old language back.
+    setConfig((prev) => (prev ? { ...prev, language: next } : prev));
     if (!savedConfig) return;
     try {
       // Persist only the language on top of the SAVED config: unsaved drafts
       // must not ride along, and an invalid draft must not block the switch.
-      const saved = await api<Config>("config", { method: "PUT", body: JSON.stringify({ ...savedConfig, language: next }) });
-      setSavedConfig(saved);
-      setConfig((prev) => (prev ? { ...prev, language: next } : prev));
+      // The queued payload is built from the latest acknowledged config when
+      // its turn starts, so it cannot revert settings a Save just wrote.
+      await writeLanguage(next);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : t("Could not save configuration"));
     }
@@ -1198,15 +1230,22 @@ function App() {
       ]);
       if (replaceLocalConfig || !dirtyRef.current) {
         setConfig(nextConfig);
-        setSavedConfig(nextConfig);
+        applySavedConfig(nextConfig);
       }
       // The saved configuration is the source of truth for the language once
       // it names one explicitly; "auto" keeps the browser-detected choice.
-      if (nextConfig.language === "en" || nextConfig.language === "zh-TW") {
-        if (getLang() !== nextConfig.language) {
-          setLang(nextConfig.language);
-          setLangState(nextConfig.language);
+      // Skip while our own write is in flight: this poll may read pre-write
+      // state and flip the language back and forth.
+      const serverLanguage = nextConfig.language;
+      if (!configWriteRef.current && (serverLanguage === "en" || serverLanguage === "zh-TW")) {
+        if (getLang() !== serverLanguage) {
+          setLang(serverLanguage);
+          setLangState(serverLanguage);
         }
+        // Reconcile the draft too: an external change (another tab) must not
+        // be written back old by a later Save.
+        setConfig((prev) => (prev && prev.language !== serverLanguage
+          ? { ...prev, language: serverLanguage } : prev));
       }
       setSnapshots(nextSnapshots);
       setManifests(nextManifests);
@@ -1725,9 +1764,8 @@ function App() {
   const save = async () => {
     if (!config || !dirtyRef.current) return;
     try {
-      const saved = await api<Config>("config", { method: "PUT", body: JSON.stringify(config) });
+      const saved = await enqueueConfigWrite(() => config);
       setConfig(saved);
-      setSavedConfig(saved);
       dirtyRef.current = false;
       setDirty(false);
       setNotice(t("Saved. The physical Deck updates on its next refresh."));
