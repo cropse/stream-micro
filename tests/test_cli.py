@@ -77,7 +77,9 @@ def test_created_config_message_follows_language(tmp_path: Path, monkeypatch, ca
     assert "stream-micro: 已建立 Bridge 設定檔：" in capsys.readouterr().out
 
 
-def test_created_config_message_stays_english_by_default(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_created_config_message_stays_english_by_default(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
     monkeypatch.setattr("stream_micro.runtime.BridgeRuntime", _ImmediateRuntime)
     monkeypatch.setattr(cli, "resolve_language", lambda language, **_kw: "en")
 
