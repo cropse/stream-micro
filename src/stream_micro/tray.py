@@ -19,6 +19,15 @@ from .i18n import language_from_config, resolve_language, t
 from .runtime import BridgeRuntime
 
 
+def make_startup_registration(config_path: Path, executable: Path) -> Any:
+    from . import paths
+    from .windows_startup import StartupRegistration
+
+    if paths.is_frozen():
+        return StartupRegistration(config_path, executable, frozen=True, executable=executable)
+    return StartupRegistration(config_path, executable.with_name("pythonw.exe"))
+
+
 def probe_bridge(url: str) -> bool:
     try:
         return httpx.get(url + "/api/status?include_plugins=false", timeout=1,
@@ -132,7 +141,6 @@ def main(config_path: Path) -> int:
     if sys.platform != "win32":
         raise RuntimeError("System tray mode requires Windows")
     from .windows_instance import SingleInstance
-    from .windows_startup import StartupRegistration
 
     config_path = config_path.resolve()
     if not config_path.exists():
@@ -166,8 +174,7 @@ def main(config_path: Path) -> int:
                 ),
                 on_language=lambda _lang: icon.update_menu(),
             )
-            controller.startup = StartupRegistration(
-                config_path, Path(sys.executable).with_name("pythonw.exe"))
+            controller.startup = make_startup_registration(config_path, Path(sys.executable))
 
             def enqueue(command: str) -> Callable[..., None]:
                 def callback(*_args: object) -> None:

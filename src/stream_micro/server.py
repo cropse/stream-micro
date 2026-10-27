@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import paths
 from .bridge import BridgeError, BridgeService
 from .claude_setup import ClaudeSetupError
 from .control_config import ControlConfigError
@@ -225,7 +226,7 @@ def create_app(
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
-    dashboard_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    dashboard_dir = paths.frontend_dist_dir()
     if (dashboard_dir / "index.html").is_file():
         # Windows registry entries can map .js to text/plain, which browsers reject
         # for module scripts.

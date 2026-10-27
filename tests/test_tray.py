@@ -152,3 +152,21 @@ def test_run_loop_follows_language_provider():
     controller.run(lambda: None)
     assert controller.language == "zh-TW"
     assert languages == ["zh-TW"]
+
+
+def test_startup_registration_factory_points_source_at_pythonw(tmp_path):
+    from stream_micro.tray import make_startup_registration
+
+    exe = tmp_path / "Scripts" / "python.exe"
+    registration = make_startup_registration(tmp_path / "bridge.yaml", exe)
+    assert not registration.frozen
+    assert registration.pythonw == (tmp_path / "Scripts" / "pythonw.exe")
+
+
+def test_startup_registration_factory_points_frozen_at_the_exe(tmp_path, monkeypatch):
+    from stream_micro.tray import make_startup_registration
+
+    monkeypatch.setattr("stream_micro.paths.is_frozen", lambda: True)
+    exe = tmp_path / "StreamMicro.exe"
+    registration = make_startup_registration(tmp_path / "bridge.yaml", exe)
+    assert registration.frozen

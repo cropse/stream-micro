@@ -774,3 +774,15 @@ def test_config_round_trip_preserves_language(tmp_path: Path) -> None:
         data["language"] = "zh-TW"
         assert client.put("/api/config", json=data).status_code == 200
         assert client.get("/api/config").json()["language"] == "zh-TW"
+
+
+def test_dashboard_serves_bundled_dist_from_resolver(tmp_path: Path, monkeypatch) -> None:
+    dist = tmp_path / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<html>deck</html>", encoding="utf-8")
+    monkeypatch.setattr("stream_micro.paths.frontend_dist_dir", lambda: dist)
+    config_path = tmp_path / "control.yaml"
+    write_control_config(config_path, default_control_config())
+    with TestClient(create_app(config_path)) as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/").text == "<html>deck</html>"

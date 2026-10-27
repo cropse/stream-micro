@@ -121,6 +121,24 @@ uv run stream-micro serve
 Bridge 有回應時圖示是綠色、啟動或停止中是黃色、停止或無回應是紅色。
 單純的服務故障不會讓圖示變紅。
 
+## 可攜 Windows 執行檔
+
+下載 Windows zip 解壓到任意資料夾，雙擊 `StreamMicro.exe` 即可使用。
+設定（`bridge.yaml`）、日誌（`bridge.log`）與額度狀態（`.state/`，第一次
+被插件使用時建立）都放在執行檔旁。更新時：先從系統匣選單**結束**
+Stream Micro，把新 zip 解壓蓋到原資料夾再重新啟動；zip 永遠不含設定檔。
+搬移資料夾後，請重新勾選**登入自動啟動**；若你有使用 Claude companion，
+也請到 Dashboard 重新安裝。
+
+從原始碼建置執行檔：
+
+```powershell
+uv sync --dev --group packaging
+uv run --group packaging python build_exe.py
+```
+
+原始碼開發流程（`serve` 與 `start.vbs`）不受影響。
+
 ## 協助與延伸閱讀
 
 - [Provider setup and advanced configuration](docs/configuration.md) — 整合

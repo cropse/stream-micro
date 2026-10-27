@@ -130,6 +130,25 @@ The icon is green when the local Bridge responds, yellow while starting or
 stopping, and red when stopped or unavailable. A provider outage alone does
 not turn it red.
 
+## Portable Windows executable
+
+Download and extract the Windows zip to any folder, then double-click
+`StreamMicro.exe`. Settings (`bridge.yaml`), logs (`bridge.log`), and quota state
+(`.state/`, created when a plugin first uses it) live beside the executable.
+To update, exit Stream Micro from the tray menu (**結束**), extract the new zip
+over the existing folder, then relaunch; the zip never contains settings.
+After moving the folder, re-enable **登入自動啟動**
+and reinstall the Claude companion from the Dashboard if you use it.
+
+To build the executable from source:
+
+```powershell
+uv sync --dev --group packaging
+uv run --group packaging python build_exe.py
+```
+
+The source development workflow using `serve` and `start.vbs` is unchanged.
+
 ## Help and further reading
 
 - [Provider setup and advanced configuration](docs/configuration.md) — integration

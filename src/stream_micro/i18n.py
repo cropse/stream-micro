@@ -34,6 +34,10 @@ ZH_TW: dict[str, str] = {
         "Stream Micro could not start. Check bridge.log and run uv sync --dev "
         "in the project folder, then try again."
     ): "Stream Micro 無法啟動。請查看 bridge.log，在專案資料夾執行 uv sync --dev 後再試一次。",
+    (
+        "Stream Micro could not start. Check bridge.log next to StreamMicro.exe, "
+        "then try again."
+    ): "Stream Micro 無法啟動。請查看 StreamMicro.exe 旁的 bridge.log 後再試一次。",
 }
 
 

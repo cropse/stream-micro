@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import ctypes
 import subprocess
+import sys
 from pathlib import Path
 
+from . import paths
 from .windows_instance import config_key
 
 
@@ -19,15 +21,24 @@ def startup_directory() -> Path:
 
 class StartupRegistration:
     def __init__(self, config_path: Path, pythonw: Path,
-                 startup_dir: Path | None = None) -> None:
+                 startup_dir: Path | None = None, *, frozen: bool | None = None,
+                 executable: Path | None = None) -> None:
         self.config_path = config_path.resolve()
         self.pythonw = pythonw.resolve()
+        self.frozen = paths.is_frozen() if frozen is None else frozen
         directory = startup_dir if startup_dir is not None else startup_directory()
         self.path = directory / ("StreamMicro-" + config_key(config_path) + ".vbs")
-        command = subprocess.list2cmdline([
-            str(self.pythonw), "-m", "stream_micro.cli", "tray",
-            "--bridge-config", str(self.config_path),
-        ])
+        if self.frozen:
+            exe = (executable if executable is not None else Path(sys.executable)).resolve()
+            arguments = [str(exe)]
+            if self.config_path != (exe.parent / "bridge.yaml").resolve():
+                arguments.extend(["--bridge-config", str(self.config_path)])
+            command = subprocess.list2cmdline(arguments)
+        else:
+            command = subprocess.list2cmdline([
+                str(self.pythonw), "-m", "stream_micro.cli", "tray",
+                "--bridge-config", str(self.config_path),
+            ])
         def quoted(value: str) -> str:
             return '"' + value.replace('"', '""') + '"'
         self._contents = (
@@ -48,7 +59,7 @@ class StartupRegistration:
         if self.path.exists() and not self.is_enabled():
             raise RuntimeError("Startup entry belongs to another installation; left unchanged")
         if enabled:
-            if not self.pythonw.is_file():
+            if not self.pythonw.is_file() and not self.frozen:
                 raise FileNotFoundError("pythonw.exe not found; run uv sync first")
             if not self.path.exists():
                 with self.path.open("x", encoding="utf-16", newline="") as output:

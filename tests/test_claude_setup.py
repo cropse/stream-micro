@@ -307,5 +307,23 @@ def test_a_script_with_a_similar_name_is_not_ours(tmp_path: Path) -> None:
         _write(path, {"hooks": _hooks(other)})
         assert inspect(path, PORT)["hooks"]["state"] == "missing"
     _write(path, {"hooks": _hooks(f"node '/elsewhere/report-status.mjs' --stream-micro-url={url}")})
-    assert inspect(path, PORT)["hooks"]["state"] == "ours"  # our script, another checkout
+    assert (
+        inspect(path, PORT)["hooks"]["state"] == "wrong_port"
+    )  # another checkout -> stale, offered the fix flow
+
+
+def test_moved_installation_is_reported_as_stale(tmp_path: Path, monkeypatch) -> None:
+    integration = tmp_path / "integrations" / "claude-code-stream-micro"
+    scripts = integration / "scripts"
+    scripts.mkdir(parents=True)
+    for name in ("report-status.mjs", "report-quota.mjs"):
+        (scripts / name).write_text("export {}", encoding="utf-8")
+    monkeypatch.setattr(claude_setup, "INTEGRATION_DIR", integration)
+    settings = tmp_path / "settings.json"
+    claude_setup.install(settings, 8765, {"hooks", "statusline"})
+    assert claude_setup.inspect(settings, 8765)["hooks"]["state"] == "ours"
+    monkeypatch.setattr(claude_setup, "INTEGRATION_DIR", tmp_path / "moved")
+    result = claude_setup.inspect(settings, 8765)
+    assert result["hooks"]["state"] == "wrong_port"
+    assert result["statusline"]["state"] == "wrong_port"
 

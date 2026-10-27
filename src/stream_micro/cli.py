@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Thread
 
+from . import paths
 from .app import run
 from .bridge import BridgeService
 from .config import ConfigError, load_config
@@ -45,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bridge-config",
         type=Path,
-        default=Path("bridge.yaml"),
+        default=None,
         help="Bridge control configuration path (used with serve)",
     )
     parser.add_argument(
@@ -83,6 +84,12 @@ def create_reload_app():
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.bridge_config is None:
+        args.bridge_config = paths.default_bridge_config(
+            frozen=paths.is_frozen(), app_root_dir=paths.app_root()
+        )
+    if args.command is None and paths.is_frozen():
+        args.command = "tray"
     try:
         lang = resolve_language(language_from_config(args.bridge_config))
         if args.command == "tray":
@@ -98,8 +105,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ctypes.windll.user32.MessageBoxW(
                         None,
                         t(
-                            "Stream Micro could not start. Check bridge.log and run "
-                            "uv sync --dev in the project folder, then try again.",
+                            (
+                                "Stream Micro could not start. Check bridge.log next to "
+                                "StreamMicro.exe, then try again."
+                                if paths.is_frozen()
+                                else "Stream Micro could not start. Check bridge.log and run "
+                                "uv sync --dev in the project folder, then try again."
+                            ),
                             lang,
                         ),
                         "Stream Micro", 16,
@@ -144,8 +156,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 runtime.stop()
             return 0
         if args.demo:
-            paths = write_demo(args.config, args.output)
-            print(f"Demo images written: {paths[0]} and {paths[1]}")
+            demo_paths = write_demo(args.config, args.output)
+            print(f"Demo images written: {demo_paths[0]} and {demo_paths[1]}")
             return 0
         config = load_config(args.config)
         logging.basicConfig(

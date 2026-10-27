@@ -158,3 +158,36 @@ def test_reset_on_exit_is_opt_in_and_still_closes() -> None:
 
     assert deck.resets == 1
     assert deck.closed == 1
+
+
+def test_hidapi_search_path_uses_app_root(monkeypatch, tmp_path) -> None:
+    import os
+
+    from stream_micro import device
+
+    added: list[str] = []
+    monkeypatch.setattr(device.paths, "app_root", lambda: tmp_path)
+    monkeypatch.setattr(os, "add_dll_directory", lambda value: added.append(value) or object())
+    (tmp_path / "hidapi.dll").touch()
+    device._HIDAPI_DIRECTORY = None
+    try:
+        device._prepare_hidapi_search_path()
+    finally:
+        device._HIDAPI_DIRECTORY = None
+    assert added == [str(tmp_path)]
+
+
+def test_hidapi_search_path_skipped_without_dll(monkeypatch, tmp_path) -> None:
+    import os
+
+    from stream_micro import device
+
+    added: list[str] = []
+    monkeypatch.setattr(device.paths, "app_root", lambda: tmp_path)
+    monkeypatch.setattr(os, "add_dll_directory", lambda value: added.append(value) or object())
+    device._HIDAPI_DIRECTORY = None
+    try:
+        device._prepare_hidapi_search_path()
+    finally:
+        device._HIDAPI_DIRECTORY = None
+    assert added == []
