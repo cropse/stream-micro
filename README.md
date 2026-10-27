@@ -50,6 +50,23 @@ startup fails safely: **no process is killed or adopted**. Close that instance
 yourself before restarting Bridge from the tray. There is no automatic crash
 restart in this version, and this application never starts/stops OpenCode.
 
+## Portable Windows executable
+
+Download and extract the Windows zip to any folder, then double-click
+`StreamMicro.exe`. `bridge.yaml`, `.state/`, and `bridge.log` are created beside
+the executable. To update, extract a new zip over the existing folder; the zip
+never contains settings. After moving the folder, re-enable **登入自動啟動**
+and reinstall the Claude companion from the Dashboard if you use it.
+
+To build the executable from source:
+
+```powershell
+uv sync --dev --group packaging
+uv run --group packaging python build_exe.py
+```
+
+The source development workflow using `serve` and `start.vbs` is unchanged.
+
 Tray logs are written beside `bridge.yaml` to `bridge.log`, rotated at 5 MiB
 with one backup, `bridge.log.1`. Configuration or dependency failures before
 tray creation are shown in a Windows error dialog. `serve` and `serve --reload`
