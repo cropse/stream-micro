@@ -302,8 +302,26 @@ def test_title_size_prefers_whole_words_over_a_bigger_split_word() -> None:
     from stream_micro.control_renderer import _wrap_lines
 
     draw = ImageDraw.Draw(Image.new("RGB", (72, 72)))
-    # At 17 px "Release" alone is wider than the key; 14 px keeps it whole.
-    assert _wrap_lines(draw, "Release notes", _font(17, bold=True), 66, 2, split_words=False)[1]
+    # Calibrate against whichever font _font() finds on this machine: a size
+    # where "Release" alone is wider than the key, and the largest size where
+    # it fits. Windows font availability (CJK fonts, Arial) differs per system,
+    # so fixed pixel sizes are not portable.
+    wide_size = next(
+        (
+            size
+            for size in range(14, 41)
+            if draw.textbbox((0, 0), "Release", font=_font(size, bold=True))[2] > 66
+        ),
+        None,
+    )
+    if wide_size is None:
+        pytest.skip("no available font renders 'Release' wider than the key")
+    fit_size = next(
+        size
+        for size in reversed(range(10, wide_size))
+        if draw.textbbox((0, 0), "Release", font=_font(size, bold=True))[2] <= 66
+    )
+    assert _wrap_lines(draw, "Release notes", _font(wide_size, bold=True), 66, 2, split_words=False)[1]
     image = render_control_key(
         ButtonBinding(key_index=0, plugin="claude_code", component="session"),
         AgentSession("s", "Release notes", SessionState.COMPLETED, "docs"),
@@ -312,7 +330,7 @@ def test_title_size_prefers_whole_words_over_a_bigger_split_word() -> None:
         provider_id="claude_code",
     )
     assert image.size == (72, 72)
-    text, truncated = _wrap_lines(draw, "Release notes", _font(14, bold=True), 66, 3,
+    text, truncated = _wrap_lines(draw, "Release notes", _font(fit_size, bold=True), 66, 3,
                                   split_words=False)
     assert not truncated and "Releas\n" not in text
 
