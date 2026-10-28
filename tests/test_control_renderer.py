@@ -321,7 +321,9 @@ def test_title_size_prefers_whole_words_over_a_bigger_split_word() -> None:
         for size in reversed(range(10, wide_size))
         if draw.textbbox((0, 0), "Release", font=_font(size, bold=True))[2] <= 66
     )
-    assert _wrap_lines(draw, "Release notes", _font(wide_size, bold=True), 66, 2, split_words=False)[1]
+    assert _wrap_lines(
+        draw, "Release notes", _font(wide_size, bold=True), 66, 2, split_words=False
+    )[1]
     image = render_control_key(
         ButtonBinding(key_index=0, plugin="claude_code", component="session"),
         AgentSession("s", "Release notes", SessionState.COMPLETED, "docs"),
