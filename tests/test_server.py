@@ -32,7 +32,9 @@ def opencode_handler(request: httpx.Request) -> httpx.Response:
 
 def app_with_plugin(tmp_path: Path) -> TestClient:
     config_path = tmp_path / "control.yaml"
-    write_control_config(config_path, default_control_config())
+    config = default_control_config()
+    config.plugins["opencode"]["enabled"] = True
+    write_control_config(config_path, config)
     app = create_app(config_path)
     app.state.bridge.plugins["opencode"] = OpenCodePlugin(
         {"enabled": True, "endpoints": ["http://127.0.0.1:4096"], "password_env": None},

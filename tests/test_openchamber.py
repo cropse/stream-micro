@@ -55,7 +55,9 @@ def test_bridge_prefers_the_discovered_openchamber_session_source(
     tmp_path, monkeypatch
 ) -> None:
     config_path = tmp_path / "bridge.yaml"
-    write_control_config(config_path, default_control_config())
+    config = default_control_config()
+    config.plugins["opencode"]["enabled"] = True
+    write_control_config(config_path, config)
     desktop = OpenChamberDesktop(
         url="http://127.0.0.1:57123",
         opencode_proxy_url="http://127.0.0.1:57123/api",

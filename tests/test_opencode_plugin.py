@@ -1,4 +1,7 @@
 import json
+import subprocess
+import sys
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -8,6 +11,7 @@ from stream_micro.plugins.opencode import (
     STALE_THRESHOLD_SECONDS,
     OpenCodeError,
     OpenCodePlugin,
+    default_loopback_ports,
     listening_loopback_ports,
 )
 
@@ -156,6 +160,78 @@ def test_discovery_uses_configured_and_listening_loopback_endpoints() -> None:
     found = plugin().discover()
 
     assert found[0].url == "http://127.0.0.1:4096"
+
+
+def test_snapshot_recovers_when_server_restarts_on_a_different_port() -> None:
+    active_port = 4096
+
+    def restarting_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.port != active_port:
+            raise httpx.ConnectError("Connection refused", request=request)
+        return handler(request)
+
+    client = OpenCodePlugin(
+        {"enabled": True, "endpoints": ["http://127.0.0.1:4096"]},
+        client=httpx.Client(transport=httpx.MockTransport(restarting_handler)),
+        port_provider=lambda: {active_port},
+    )
+    assert client.snapshot().health.connected
+    active_port = 9000
+    disconnected = client.snapshot()
+    assert not disconnected.health.connected
+    assert disconnected.health.detail == "OpenCode server disconnected; waiting to reconnect"
+    assert client.endpoint is None
+    reconnected = client.snapshot()
+    assert reconnected.health.connected
+    assert reconnected.health.endpoint == "http://127.0.0.1:9000"
+    assert reconnected.sessions
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_listener_discovery_runs_without_a_windows_console(monkeypatch, platform: str) -> None:
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command, 0, "  TCP  127.0.0.1:4096  0.0.0.0:0  LISTENING  100\n"
+        )
+
+    monkeypatch.setattr("stream_micro.process_launch.sys.platform", platform)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(
+        subprocess, "STARTUPINFO", lambda: SimpleNamespace(dwFlags=0, wShowWindow=1), raising=False
+    )
+    monkeypatch.setattr(subprocess, "STARTF_USESHOWWINDOW", 1, raising=False)
+    monkeypatch.setattr(subprocess, "SW_HIDE", 0, raising=False)
+    monkeypatch.setattr(subprocess, "run", run)
+    assert default_loopback_ports() == {4096}
+    assert calls[0][1]["creationflags"] == (0x08000000 if platform == "win32" else 0)
+    assert calls[0][1]["capture_output"] is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console regression")
+def test_listener_discovery_child_has_no_console_on_windows(monkeypatch) -> None:
+    real_run = subprocess.run
+    console_handles = []
+
+    def probe_console(command, **kwargs):
+        result = real_run(
+            [
+                sys.executable,
+                "-c",
+                "import ctypes, sys; "
+                "sys.stderr.write(str(ctypes.windll.kernel32.GetConsoleWindow())); "
+                "print(' TCP 127.0.0.1:4096 0.0.0.0:0 LISTENING 100')",
+            ],
+            **kwargs,
+        )
+        console_handles.append(result.stderr)
+        return result
+
+    monkeypatch.setattr(subprocess, "run", probe_console)
+    assert default_loopback_ports() == {4096}
+    assert console_handles == ["0"]
 
 
 def test_snapshot_reads_open_code_session_status() -> None:

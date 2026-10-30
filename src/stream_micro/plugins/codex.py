@@ -20,6 +20,8 @@ from queue import Empty, Queue
 from typing import IO, Any
 from urllib.parse import quote
 
+from .. import __version__
+from ..process_launch import background_process_options
 from ..windows_focus import WindowFocusError, focus_app_windows
 from .base import AgentSession, PluginHealth, PluginManifest, PluginSnapshot, SessionState
 
@@ -167,6 +169,7 @@ class CodexAppServerClient:
                 encoding="utf-8",
                 env=environment,
                 shell=False,
+                **background_process_options(),
             )
         except OSError as exc:
             raise CodexError(f"Could not start Codex App Server: {exc}") from exc
@@ -201,7 +204,7 @@ class CodexAppServerClient:
                 "clientInfo": {
                     "name": "stream-micro",
                     "title": "Stream Micro Bridge",
-                    "version": "0.1.0",
+                    "version": __version__,
                 },
             },
         )

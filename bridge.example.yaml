@@ -10,7 +10,7 @@ stream_deck:
   quota_display: remaining
 plugins:
   opencode:
-    enabled: true
+    enabled: false
     endpoints:
     - http://127.0.0.1:4096
     password_env: null
@@ -53,11 +53,11 @@ plugins:
     codex_home: null
 buttons:
 - key_index: 0
-  plugin: opencode
-  component: session
-  span: 5
+  plugin: null
+  component: null
+  span: 1
   session_id: null
-  action: select_session
+  action: null
   action_params: {}
   window_binding: null
 - key_index: 1

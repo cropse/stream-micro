@@ -35,7 +35,7 @@ def test_quota_renderer_font_renders_the_cjk_glyph_for_display() -> None:
     font = _font(16, bold=True)
     cjk = Image.new("RGB", (64, 32))
     missing = Image.new("RGB", (64, 32))
-    ImageDraw.Draw(cjk).text((0, 0), "显", fill="white", font=font)
+    ImageDraw.Draw(cjk).text((0, 0), "字", fill="white", font=font)
     ImageDraw.Draw(missing).text((0, 0), "\ufffd", fill="white", font=font)
 
     assert cjk.tobytes() != missing.tobytes()
