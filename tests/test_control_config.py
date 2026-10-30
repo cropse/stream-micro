@@ -14,16 +14,43 @@ from stream_micro.control_config import (
 )
 
 
-def test_default_control_config_has_mk2_layout_and_span_session_zone() -> None:
+def test_default_control_config_has_unassigned_mk2_layout() -> None:
     config = default_control_config()
 
     assert config.stream_deck.model == "mk2"
     assert len(config.buttons) == MK2_KEY_COUNT
-    assert config.buttons[0].component == "session"
-    assert config.buttons[0].span == 5
-    assert config.buttons[1].component is None
-    assert config.buttons[5].component is None
+    assert [button.key_index for button in config.buttons] == list(range(MK2_KEY_COUNT))
+    assert all(button.plugin is None and button.component is None for button in config.buttons)
+    assert all(button.span == 1 and button.action is None for button in config.buttons)
     assert config.plugins["claude_code"]["enabled"] is False
+    assert config.plugins["opencode"]["enabled"] is False
+
+
+def test_manually_added_opencode_and_session_layout_survive_reload(tmp_path: Path) -> None:
+    data = control_config_data(default_control_config())
+    data["plugins"]["opencode"]["enabled"] = True
+    data["buttons"][0].update({
+        "plugin": "opencode", "component": "session", "span": 5,
+        "action": "select_session",
+    })
+    configured = parse_control_config(data)
+    path = tmp_path / "control.yaml"
+    write_control_config(path, configured)
+
+    loaded = load_control_config(path)
+
+    assert loaded.plugins["opencode"]["enabled"] is True
+    assert loaded.buttons[0].plugin == "opencode"
+    assert loaded.buttons[0].span == 5
+    assert control_config_data(loaded) == control_config_data(configured)
+
+
+def test_example_config_does_not_preassign_opencode() -> None:
+    config = load_control_config(Path(__file__).parents[1] / "bridge.example.yaml")
+
+    assert config.plugins["opencode"]["enabled"] is False
+    assert all(button.plugin != "opencode" for button in config.buttons)
+    assert all(config.buttons[index].component is None for index in range(5))
 
 
 def test_legacy_five_session_keys_migrate_to_one_span_zone() -> None:
@@ -65,7 +92,8 @@ def test_control_config_round_trip_is_atomic_and_loadable(tmp_path: Path) -> Non
         (lambda data: data["buttons"][0].update({"plugin": "missing"}), "unknown plugin"),
         (
             lambda data: data["buttons"][0].update(
-                {"window_binding": {"executable": "x", "window_class": "y"}}
+                {"plugin": "opencode", "component": "session",
+                 "window_binding": {"executable": "x", "window_class": "y"}}
             ),
             "window_binding",
         ),

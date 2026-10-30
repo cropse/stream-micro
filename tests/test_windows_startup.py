@@ -50,7 +50,10 @@ def test_frozen_registration_runs_only_the_executable(tmp_path: Path):
     content = registration.path.read_text(encoding="utf-16")
     assert "StreamMicro.exe" in content
     assert "--bridge-config" not in content
-    assert "pythonw" not in content and "-m" not in content
+    run_line = next(line for line in content.splitlines() if line.startswith("sh.Run "))
+    quoted_executable = '"' + str(exe.resolve()).replace('"', '""') + '"'
+    vbs_command = '"' + quoted_executable.replace('"', '""') + '"'
+    assert run_line == f"sh.Run {vbs_command}, 0, False"
     registration.set_enabled(False)
     assert not registration.path.exists()
 

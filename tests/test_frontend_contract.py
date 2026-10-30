@@ -1,6 +1,29 @@
+import re
 from pathlib import Path
 
 FRONTEND = Path(__file__).parents[1] / "frontend" / "src" / "main.tsx"
+
+
+def test_proxy_and_custom_json_belong_to_other_without_billing_badges() -> None:
+    source = FRONTEND.read_text(encoding="utf-8")
+    proxy = re.search(r'\{ id: "cliproxy_quota", group:.*?\}', source)
+    custom = re.search(r'\{ id: "custom", name: "Custom JSON API".*?\}', source)
+    assert proxy is not None and 'group: "other"' in proxy.group()
+    assert 'billing:' not in proxy.group()
+    assert custom is not None and 'billing:' not in custom.group()
+    assert '["other", "Other"]' in source
+    assert 'group: preset.billing ?? "other"' in source
+    assert 'group: (preset.billing ?? "other") as ServiceGroup' in source
+    assert 'title={t("Per-account quota")} />' in source
+    assert '{billing && <BillingBadge billing={billing} />}' in source
+    translations = FRONTEND.with_name("i18n.ts").read_text(encoding="utf-8")
+    assert '"Other": "其他"' in translations
+
+
+def test_added_service_badge_does_not_claim_a_healthy_connection() -> None:
+    source = FRONTEND.read_text(encoding="utf-8")
+    assert 'choice.connected ? <span className="tag tag-connected">{t("Added")}' in source
+    assert 'choice.connected ? <span className="tag tag-connected">{t("Connected")}' not in source
 
 
 def test_deck_preview_only_selects_a_key_for_editing() -> None:

@@ -102,23 +102,16 @@ class ControlConfig:
 
 
 def default_control_config() -> ControlConfig:
-    """Return the initial MK.2 layout without provider credentials."""
+    """Return an unassigned MK.2 layout without provider credentials."""
 
-    buttons: list[ButtonBinding] = []
-    for index in range(MK2_KEY_COUNT):
-        if index == 0:
-            buttons.append(
-                ButtonBinding(index, "opencode", "session", span=5, action="select_session")
-            )
-        else:
-            buttons.append(ButtonBinding(index))
+    buttons = [ButtonBinding(index) for index in range(MK2_KEY_COUNT)]
     return ControlConfig(
         schema_version=SCHEMA_VERSION,
         bridge=BridgeSettings(),
         stream_deck=Mk2Settings(),
         plugins={
             "opencode": {
-                "enabled": True,
+                "enabled": False,
                 "endpoints": ["http://127.0.0.1:4096"],
                 "password_env": None,
             },
