@@ -1,5 +1,8 @@
 # stream-micro
 
+OpenCode is opt-in on a new installation: add it under Configuration → Add a service
+and keep your OpenCode server running. Existing saved provider settings are preserved.
+
 **Your AI sessions and usage, at a glance on your Stream Deck.**
 
 English | [繁體中文](README.zh-TW.md)
@@ -91,7 +94,8 @@ Only pressing the physical Stream Deck does that.
 
 Short-press a Session key to return to that session. Hold it for **two seconds**
 to pin it to its slot; an orange frame marks a pinned session. Hold again to
-unpin. The default OpenCode layout uses the first five keys for sessions.
+unpin. New installations start with unassigned keys. Add OpenCode through
+Configuration → Add a service, then assign its session keys in the layout.
 
 The state strip tells you what needs attention:
 

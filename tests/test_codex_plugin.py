@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from queue import Queue
 from tempfile import NamedTemporaryFile
 from threading import Event
 from time import monotonic, sleep
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
@@ -205,7 +207,9 @@ def test_app_server_client_sends_handshake_and_parses_thread_list() -> None:
     assert written[0]["method"] == "initialize"
     assert written[0]["params"]["clientInfo"]["name"] == "stream-micro"
     assert written[0]["params"]["clientInfo"]["title"] == "Stream Micro Bridge"
-    assert written[0]["params"]["clientInfo"]["version"] == "0.1.0"
+    from stream_micro import __version__
+
+    assert written[0]["params"]["clientInfo"]["version"] == __version__
     assert written[1] == {"jsonrpc": "2.0", "method": "initialized", "params": {}}
     assert written[2] == {
         "jsonrpc": "2.0",
@@ -218,6 +222,53 @@ def test_app_server_client_sends_handshake_and_parses_thread_list() -> None:
             "sourceKinds": ["cli", "vscode", "appServer"],
         },
     }
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_app_server_client_uses_no_console_flag_only_on_windows(monkeypatch, platform) -> None:
+    monkeypatch.setattr("stream_micro.process_launch.sys.platform", platform)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(
+        subprocess, "STARTUPINFO", lambda: SimpleNamespace(dwFlags=0, wShowWindow=1), raising=False
+    )
+    monkeypatch.setattr(subprocess, "STARTF_USESHOWWINDOW", 1, raising=False)
+    monkeypatch.setattr(subprocess, "SW_HIDE", 0, raising=False)
+    process = FakePopen([])
+    with patch("stream_micro.plugins.codex.subprocess.Popen", return_value=process) as popen:
+        client = CodexAppServerClient("fake-codex")
+        try:
+            client.start()
+            options = popen.call_args.kwargs
+            assert options["creationflags"] == (0x08000000 if platform == "win32" else 0)
+            if platform == "win32":
+                assert options["startupinfo"].dwFlags & 1
+                assert options["startupinfo"].wShowWindow == 0
+            else:
+                assert options["startupinfo"] is None
+            assert options["shell"] is False
+            assert options["stdin"] is subprocess.PIPE
+            assert options["stdout"] is subprocess.PIPE
+        finally:
+            client.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console regression")
+def test_app_server_client_real_child_has_no_console(monkeypatch) -> None:
+    probe = (
+        "import ctypes,json; "
+        "print(json.dumps({'method':'console_probe','params':"
+        "{'handle':ctypes.windll.kernel32.GetConsoleWindow()}}),flush=True)"
+    )
+    monkeypatch.setattr(
+        "stream_micro.plugins.codex.resolve_codex_command",
+        lambda _path: [sys.executable, "-c", probe],
+    )
+    client = CodexAppServerClient("test-owned-console-probe")
+    try:
+        client.start()
+        assert client.read_line() == {"method": "console_probe", "params": {"handle": 0}}
+    finally:
+        client.close()
 
 
 def test_app_server_client_reads_chatgpt_rate_limits() -> None:

@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from ..process_launch import background_process_options
 from .base import AgentSession, PluginHealth, PluginManifest, PluginSnapshot, SessionState
 
 
@@ -53,6 +54,8 @@ def listening_loopback_ports(netstat_output: str) -> set[int]:
 
 
 def default_loopback_ports() -> set[int]:
+    # Both OpenCode and OpenChamber use this from the windowless tray app.
+    # Capturing stdout alone does not stop Windows creating a console window.
     try:
         result = subprocess.run(
             ["netstat", "-ano", "-p", "tcp"],
@@ -60,6 +63,7 @@ def default_loopback_ports() -> set[int]:
             capture_output=True,
             text=True,
             timeout=3,
+            **background_process_options(),
         )
     except (OSError, subprocess.SubprocessError):
         return set()
@@ -528,7 +532,15 @@ class OpenCodePlugin:
             endpoint = self._require_endpoint()
             return PluginSnapshot(PluginHealth(True, "Connected", endpoint.url), self.sessions())
         except OpenCodeError as exc:
-            return PluginSnapshot(PluginHealth(False, str(exc)), ())
+            # A server can restart on another port. Do not keep polling the
+            # failed cached endpoint forever; discover again on the next poll.
+            self.endpoint = None
+            detail = (
+                "OpenCode server disconnected; waiting to reconnect"
+                if isinstance(exc.__cause__, httpx.ConnectError)
+                else str(exc)
+            )
+            return PluginSnapshot(PluginHealth(False, detail), ())
 
     def mark_viewed(self, session_id: str) -> None:
         """Clear the COMPLETED flag after the user acknowledges the session."""

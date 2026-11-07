@@ -80,7 +80,8 @@ authentication and a separate security review.
 
 - `stream-micro serve` is the control-surface entrypoint. It creates and uses
   `bridge.yaml`, leaving the legacy Ollama `config.yaml` untouched.
-- For the initial OpenCode layout, the five keys in row one are Sessions.
+- New installations start with unassigned keys and OpenCode disabled. Users
+  can add OpenCode and assign Session zones themselves; preserve saved layouts.
   Local discovery may health-check configured loopback endpoints and
   listening loopback ports, but must not scan the LAN. A Session key always
   selects its matching OpenChamber Desktop Session through its official

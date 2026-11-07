@@ -3,6 +3,7 @@ from typing import cast
 
 from stream_micro.bridge import BridgeService
 from stream_micro.control_config import (
+    ControlConfig,
     control_config_data,
     default_control_config,
     parse_control_config,
@@ -17,6 +18,17 @@ from stream_micro.plugins.base import (
     PluginSnapshot,
     SessionState,
 )
+
+
+def opencode_session_config() -> ControlConfig:
+    """Explicit user-assigned layout; fresh installations have no session zone."""
+    data = control_config_data(default_control_config())
+    data["plugins"]["opencode"]["enabled"] = True
+    data["buttons"][0].update({
+        "plugin": "opencode", "component": "session", "span": 5,
+        "action": "select_session",
+    })
+    return parse_control_config(data)
 
 
 class SnapshotPlugin:
@@ -81,7 +93,7 @@ class RecordingService(BridgeService):
 
 def test_session_key_ignores_legacy_window_binding(tmp_path: Path) -> None:
     path = tmp_path / "bridge.yaml"
-    config = default_control_config()
+    config = opencode_session_config()
     data = {
         **control_config_data(config),
         "session_window_bindings": {
@@ -102,7 +114,7 @@ def test_session_key_ignores_legacy_window_binding(tmp_path: Path) -> None:
 
 def test_session_key_selects_the_matching_openchamber_session(tmp_path: Path) -> None:
     path = tmp_path / "bridge.yaml"
-    write_control_config(path, default_control_config())
+    write_control_config(path, opencode_session_config())
     service = RecordingService(path)
     runner = Mk2BridgeRunner(service)
     runner.sessions = (AgentSession("session-1", "Test", SessionState.IDLE),)
@@ -120,7 +132,7 @@ def test_span_child_key_selects_its_session_slot(tmp_path: Path) -> None:
     """A child key inside a span zone selects the Session at its slot offset."""
 
     path = tmp_path / "bridge.yaml"
-    data = control_config_data(default_control_config())
+    data = control_config_data(opencode_session_config())
     # Key 0 is span=5 session zone; press key 3 → slot 3 → session-4
     write_control_config(path, parse_control_config(data))
     service = RecordingService(path)
@@ -138,7 +150,7 @@ def test_span_child_key_selects_its_session_slot(tmp_path: Path) -> None:
 
 def test_long_press_pins_session_to_slot_while_other_slots_reorder(tmp_path: Path) -> None:
     path = tmp_path / "bridge.yaml"
-    write_control_config(path, default_control_config())
+    write_control_config(path, opencode_session_config())
     service = RecordingService(path)
     first = tuple(
         AgentSession(f"session-{index}", f"Test {index}", SessionState.IDLE)
@@ -189,7 +201,7 @@ def test_long_press_pins_session_to_slot_while_other_slots_reorder(tmp_path: Pat
 
 def test_physical_release_dispatches_short_press_or_long_press_pin(tmp_path: Path) -> None:
     path = tmp_path / "bridge.yaml"
-    write_control_config(path, default_control_config())
+    write_control_config(path, opencode_session_config())
     service = RecordingService(path)
     service.active_sessions = (
         AgentSession("session-1", "First", SessionState.IDLE),
@@ -272,7 +284,7 @@ def test_codex_session_zone_uses_codex_sessions_and_codex_deep_link_action(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "bridge.yaml"
-    data = control_config_data(default_control_config())
+    data = control_config_data(opencode_session_config())
     data["plugins"]["codex"]["enabled"] = True
     data["buttons"][5].update(
         {

@@ -290,6 +290,7 @@ function UsageBars({ signals, generic = false, display = "remaining" }: {
 
 // What the user can do about a provider problem, when we know.
 const FIX_HINTS: [RegExp, string][] = [
+  [/No active OpenCode server|OpenCode server disconnected/, "Start your OpenCode server or check the server endpoints above. The Bridge reconnects automatically."],
   [/No cookie value configured/, "Paste the cookie above, then Save."],
   [/cookie is expired or invalid/, "Sign in at ollama.com again and paste a new cookie (see How to get the cookie)."],
   [/management key rejected/, "Copy the management key from CLIProxyAPI's settings and paste it again."],
@@ -308,10 +309,17 @@ function fixHint(detail: string | null | undefined) {
   return found ? t(found[1]) : null;
 }
 
+function waitingForOpenCode(health?: PluginHealth) {
+  return !health?.connected && (
+    health?.detail === "No active OpenCode server found on this computer" ||
+    health?.detail === "OpenCode server disconnected; waiting to reconnect"
+  );
+}
+
 function Health({ health }: { health?: PluginHealth }) {
   if (!health) return null;
   const hint = health.connected ? null : fixHint(health.detail);
-  return <div className={`ollama-health ${health.connected ? "is-connected" : "is-error"}`}>
+  return <div className={`ollama-health ${health.connected ? "is-connected" : waitingForOpenCode(health) ? "is-waiting" : "is-error"}`}>
     <span className="health-dot" />
     <span>{tDetail(health.detail)}{hint && <small className="fix-hint">{hint}</small>}</span>
   </div>;
@@ -334,12 +342,12 @@ function BillingBadge({ billing }: { billing: Billing }) {
 function QuotaCardHead({ kicker, title, billing }: {
   kicker: string;
   title: string;
-  billing: Billing;
+  billing?: Billing;
 }) {
   return <div className="quota-card-head">
     <div><p>{kicker}</p><h2>{title}</h2></div>
     <div className="quota-card-tools">
-      <BillingBadge billing={billing} />
+      {billing && <BillingBadge billing={billing} />}
     </div>
   </div>;
 }
@@ -384,7 +392,7 @@ function CliProxyQuotaCard({ config, snapshot, updateConfig }: {
   const lastChecked = (provider: string) => providers.length === 1 && providers.includes(provider);
   const lastCheckedTitle = t("At least one account type must stay checked.");
   return <section className="panel provider-card cliproxy-card quota-card">
-    <QuotaCardHead kicker={t("CLIPROXYAPI POOL")} title={t("Per-account quota")} billing="monthly" />
+    <QuotaCardHead kicker={t("CLIPROXYAPI POOL")} title={t("Per-account quota")} />
     <label>{t("Proxy URL")}
       <input type="text" placeholder="https://proxy.example:8317" value={url} onChange={(event) => setFields({ base_url: event.target.value })} />
     </label>
@@ -615,8 +623,8 @@ function AntigravityCard({ config, snapshot, updateConfig }: {
 }
 
 // Known usage APIs; the Bridge fills in URL and fields for these (http_quota PRESETS).
-// `base` names a new source; `billing` picks its section on the Configuration page.
-const USAGE_PRESETS: { id: string; name: string; hint: string; base: string; billing: Billing }[] = [
+// Sources without a known billing model belong under Other, not a plan category.
+const USAGE_PRESETS: { id: string; name: string; hint: string; base: string; billing?: Billing }[] = [
   { id: "deepseek", name: "DeepSeek balance", hint: "A DeepSeek API key (platform.deepseek.com → API keys). Reading the balance costs nothing.", base: "deepseek", billing: "payg" },
   { id: "moonshot", name: "Moonshot balance (international)", hint: "An API key from platform.moonshot.ai (USD account). Reading the balance costs nothing.", base: "moonshot", billing: "payg" },
   { id: "moonshot_cn", name: "Moonshot balance (China)", hint: "An API key from platform.moonshot.cn (CNY account). Reading the balance costs nothing.", base: "moonshot-cn", billing: "payg" },
@@ -626,7 +634,7 @@ const USAGE_PRESETS: { id: string; name: string; hint: string; base: string; bil
   { id: "ollama", name: "Ollama Cloud credits", hint: "An ollama.com API key (Settings → Keys). Reading the balance uses no credits; no cookie needed.", base: "ollama", billing: "monthly" },
   { id: "openrouter", name: "OpenRouter key limit", hint: "Any OpenRouter API key that has a spending limit.", base: "openrouter", billing: "payg" },
   { id: "openrouter_credits", name: "OpenRouter credits", hint: "Account credits; OpenRouter may require a management key.", base: "openrouter-credits", billing: "payg" },
-  { id: "custom", name: "Custom JSON API", hint: "Any HTTPS endpoint that returns usage as JSON.", base: "custom", billing: "payg" },
+  { id: "custom", name: "Custom JSON API", hint: "Any HTTPS endpoint that returns usage as JSON.", base: "custom" },
 ];
 
 const AGENT_PLUGINS = new Set(["opencode", "codex", "claude_code", "antigravity"]);
@@ -904,8 +912,8 @@ function ClaudeSetupCheck({ setup, onChange, skipped, onSkip }: {
 // -- Connected services --------------------------------------------------------
 // The Configuration page lists only the services in use; "+ Add service" offers
 // the rest. A service is a plugin, or one usage-API source.
-type ServiceGroup = "agent" | "monthly" | "payg";
-type ServiceStatus = "ok" | "stale" | "error" | "pending" | "loading" | "off";
+type ServiceGroup = "agent" | "monthly" | "payg" | "other";
+type ServiceStatus = "ok" | "stale" | "error" | "pending" | "loading" | "waiting" | "off";
 type ServiceItem = {
   key: string;
   group: ServiceGroup;
@@ -987,10 +995,10 @@ const PLUGIN_SERVICES: { id: string; group: ServiceGroup; name: string; billing?
   { id: "codex", group: "agent", name: "Codex", needs: "Nothing: uses the codex installed on this computer." },
   { id: "opencode", group: "agent", name: "OpenCode", needs: "A running OpenCode server." },
   { id: "antigravity", group: "agent", name: "Antigravity", needs: "Antigravity installed on this computer." },
-  { id: "cliproxy_quota", group: "monthly", name: "CLIProxyAPI pool", billing: "monthly", needs: "The proxy URL and its management key." },
+  { id: "cliproxy_quota", group: "other", name: "CLIProxyAPI pool", needs: "The proxy URL and its management key." },
   { id: "ollama_quota", group: "monthly", name: "Ollama Cloud (session cookie)", billing: "monthly", needs: "A cookie copied from the browser. The API key choice is easier." },
 ];
-const SERVICE_GROUPS: [ServiceGroup, string][] = [["agent", "Agent chats"], ["monthly", "Monthly plans"], ["payg", "Pay as you go and custom"]];
+const SERVICE_GROUPS: [ServiceGroup, string][] = [["agent", "Agent chats"], ["monthly", "Monthly plans"], ["payg", "Pay as you go"], ["other", "Other"]];
 
 function servicePanelId(key: string) {
   return `svc-${key.replace(/[^a-z0-9_-]/gi, "-")}`;
@@ -1024,7 +1032,7 @@ function quotaSummary(signals: QuotaSignals | null | undefined, display: QuotaDi
 function ServiceRow({ item, open, onToggle }: { item: ServiceItem; open: boolean; onToggle: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const id = servicePanelId(item.key);
-  const statusText = { ok: t("Working"), stale: t("Last seen, not current"), error: t("Needs attention"), pending: t("Starts after Save"), loading: t("Reading…"), off: t("Turned off after Save") }[item.status];
+  const statusText = { ok: t("Working"), stale: t("Last seen, not current"), error: t("Needs attention"), pending: t("Starts after Save"), loading: t("Reading…"), waiting: t("Waiting for server"), off: t("Turned off after Save") }[item.status];
   const moveFocus = (event: React.KeyboardEvent<HTMLButtonElement>) => {
     const heads = [...document.querySelectorAll<HTMLButtonElement>(".service-row-head")];
     const at = heads.indexOf(event.currentTarget);
@@ -1096,7 +1104,7 @@ function AddServiceDialog({ choices, onPick, onClose }: { choices: ServiceChoice
           <h3>{t(label)}</h3>
           <div className="add-quota-list">
             {items.map((choice) => <button key={choice.id} type="button" className="add-quota-item" disabled={choice.connected} onClick={() => onPick(choice)}>
-              <span><b>{t(choice.name)}</b>{choice.connected ? <span className="tag tag-connected">{t("Connected")}</span> : choice.billing && <BillingBadge billing={choice.billing} />}</span>
+              <span><b>{t(choice.name)}</b>{choice.connected ? <span className="tag tag-connected">{t("Added")}</span> : choice.billing && <BillingBadge billing={choice.billing} />}</span>
               <small>{t(choice.needs)}</small>
             </button>)}
           </div>
@@ -1369,7 +1377,7 @@ function App() {
       if (signals?.stale && typeof signals.seen_at === "string") parts.push(t("last read {time}", { time: formatReset(signals.seen_at) }));
     }
     const pending = on && !wasOn;
-    const status: ServiceStatus = !on ? "off" : pending ? "pending" : poolStatus ?? (health && !health.connected && !signals?.stale ? "error" : signals?.stale ? "stale" : "ok");
+    const status: ServiceStatus = !on ? "off" : pending ? "pending" : poolStatus ?? (spec.id === "opencode" && waitingForOpenCode(health) ? "waiting" : health && !health.connected && !signals?.stale ? "error" : signals?.stale ? "stale" : "ok");
     const detail = {
       claude_code: <><ClaudeSetupCheck setup={claudeSetup} onChange={changeClaudeSetup} skipped={setupSkipped} onSkip={skipSetup} /><PlanQuotaCard kicker="" title="" snapshot={snapshot} display={quotaDisplay} note={t("Claude plan: 5-hour and weekly limits.")} /><ClaudeCodeCard config={config} snapshot={snapshot} updateConfig={updateConfig} /></>,
       codex: <><PlanQuotaCard kicker="" title="" snapshot={snapshot} display={quotaDisplay} note={t("ChatGPT plan of the account signed in to the local codex.")} /><CodexCard config={config} snapshot={snapshot} updateConfig={updateConfig} /></>,
@@ -1384,7 +1392,7 @@ function App() {
       name: t(spec.name),
       billing: spec.billing,
       status,
-      summary: parts.join(" · "),
+      summary: status === "waiting" ? tDetail(health?.detail) : parts.join(" · "),
       warn: spec.id === "claude_code" && on && setupNeedsWork(claudeSetup, setupSkipped) ? t("Setup incomplete") : undefined,
       problem: status === "error" ? tDetail(poolStatus === "error" ? poolProblem : health?.detail) : undefined,
       dirty: JSON.stringify(config?.plugins?.[spec.id]) !== JSON.stringify(savedConfig?.plugins?.[spec.id]),
@@ -1417,7 +1425,7 @@ function App() {
     const status: ServiceStatus = !current ? "off" : pending ? "pending" : !account ? "loading" : account.error ? "error" : account.signals?.stale ? "stale" : "ok";
     services.push({
       key,
-      group: preset.billing,
+      group: preset.billing ?? "other",
       name: t(preset.name),
       sub: source.label || source.id,
       billing: preset.billing,
@@ -1441,7 +1449,7 @@ function App() {
       pick: () => { turnOn(spec.id); return `plugin:${spec.id}`; },
     })),
     ...USAGE_PRESETS.map((preset) => ({
-      id: `http:${preset.id}`, group: preset.billing as ServiceGroup, name: preset.name, billing: preset.billing, connected: false,
+      id: `http:${preset.id}`, group: (preset.billing ?? "other") as ServiceGroup, name: preset.name, billing: preset.billing, connected: false,
       needs: (preset.id === "custom" ? t("A URL that returns usage as JSON, a key, and where the numbers are.") : t("Paste an API key."))
         + (sourcesIn(config).filter((source) => (source.preset || "custom") === preset.id).length ? " " + t("You already have {n}; this adds another account.", { n: sourcesIn(config).filter((source) => (source.preset || "custom") === preset.id).length }) : ""),
       pick: () => { addUsageSource(preset.id); return `source:#${currentSources.length}`; },
@@ -2000,6 +2008,7 @@ function App() {
         {services.length > 0 && <div className="service-legend" aria-hidden="true">
           <span className="status-ok"><i className="service-dot" />{t("Working")}</span>
           <span className="status-loading"><i className="service-dot" />{t("Reading…")}</span>
+          <span className="status-waiting"><i className="service-dot" />{t("Waiting for server")}</span>
           <span className="status-stale"><i className="service-dot" />{t("Last seen, not current")}</span>
           <span className="status-error"><i className="service-dot" />{t("Needs attention")}</span>
           <span className="status-pending"><i className="service-dot" />{t("Starts after Save")}</span>

@@ -178,6 +178,7 @@ const ZH: Record<string, string> = {
 
   // OpenCode
   "OPENCODE SERVERS": "OpenCode 伺服器",
+  "Waiting for server": "等待伺服器",
   Sessions: "Session",
   "Enable OpenCode provider": "啟用 OpenCode",
   "Server endpoints": "伺服器位址",
@@ -322,6 +323,8 @@ const ZH: Record<string, string> = {
   "Other quota sources": "其他額度來源",
   "Agent chats": "Agent 對話",
   "Monthly plans": "月費方案",
+  "Other": "其他",
+  "Added": "已加入",
   "Pay as you go and custom": "按量計費與自訂",
   "Paste an API key.": "貼上 API 金鑰。",
   "A URL that returns usage as JSON, a key, and where the numbers are.": "要填回傳用量 JSON 的網址、金鑰，以及數字在哪裡。",
@@ -393,6 +396,9 @@ const ZH: Record<string, string> = {
   "Check the paths under Advanced settings against the service's reply.": "對照服務的回應，檢查「進階設定」裡的路徑。",
 
   // Quota previews and messages from the Bridge
+  "No active OpenCode server found on this computer": "尚未偵測到執行中的 OpenCode 伺服器",
+  "OpenCode server disconnected; waiting to reconnect": "OpenCode 伺服器已離線；正在等待重新連線",
+  "Start your OpenCode server or check the server endpoints above. The Bridge reconnects automatically.": "請啟動 OpenCode 伺服器，或確認上方的伺服器位址；Bridge 會自動重新連線。",
   Connected: "已連線",
   "Waiting for first quota refresh": "等待第一次額度更新",
   "Management key is not configured": "尚未設定管理金鑰",

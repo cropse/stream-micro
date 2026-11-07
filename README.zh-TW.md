@@ -85,8 +85,10 @@ uv run stream-micro serve
 ### Session 按鍵
 
 短按 Session 鍵回到該 session。按住**兩秒**把它釘選在目前位置；
-被釘選的 session 有橘色外框。再按住一次取消釘選。預設的 OpenCode
-版面把前五顆鍵用作 session。
+被釘選的 session 有橘色外框。再按住一次取消釘選。初次安裝時按鍵
+尚未指派，不會自動加入 OpenCode，也不會為它預留按鍵。
+需要它時，到「設定 → 新增服務」加入，再配置 session 按鍵，並保持
+OpenCode server 執行。既有使用者儲存的服務與按鍵設定會保留。
 
 狀態色帶告訴你哪裡需要留意：
 

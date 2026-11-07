@@ -158,9 +158,11 @@ select:disabled { cursor: not-allowed; opacity: .6; }
 .ollama-health { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; font-size: 12px; }
 .ollama-health.is-connected { background: #102c29; border: 1px solid #2f765f; color: #c9f6e8; }
 .ollama-health.is-error { background: #2c1414; border: 1px solid #7a3a3a; color: #f0abb1; }
+.ollama-health.is-waiting { background: #162133; border: 1px solid #465874; color: #c9d4e3; }
 .ollama-health .health-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
 .ollama-health.is-connected .health-dot { background: #4de57a; box-shadow: 0 0 6px #4de57a; }
 .ollama-health.is-error .health-dot { background: #e55d5d; }
+.ollama-health.is-waiting .health-dot { background: #8fa8c8; }
 .ollama-usage-grid { display: grid; gap: 14px; }
 .usage-bar { display: grid; gap: 5px; }
 .usage-bar-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: #9eb0c9; }
@@ -266,6 +268,7 @@ select:disabled { cursor: not-allowed; opacity: .6; }
 .status-stale .service-dot { background: #f2b880; }
 .status-error .service-dot { background: #ff6b75; }
 .status-pending .service-dot { background: #8fd0ff; }
+.status-waiting .service-dot { background: #8fa8c8; }
 .status-off .service-dot, .dot-off { background: #4a5872; }
 .service-name { display: grid; min-width: 0; }
 .service-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
